@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magnetic Field of a Current-Carrying Wire</title>
+<style>
+  :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#060911;color:#edf2ff;font-family:Inter,ui-sans-serif,system-ui,sans-serif}body{padding:15px}
+  main{max-width:1540px;margin:auto}.top{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:0 2px 13px}h1{font-size:22px;margin:0;letter-spacing:-.02em}.intro{font-size:12px;color:#9aabc4;margin-top:5px}
+  .controls{display:grid;grid-template-columns:repeat(3,minmax(145px,1fr)) minmax(105px,.7fr) minmax(130px,.7fr) auto auto;gap:9px;align-items:end;padding:12px;margin-bottom:12px;border:1px solid #ffffff22;border-radius:10px;background:#0b101c}
+  .field{display:flex;flex-direction:column;gap:5px;min-width:0}.field label,.small-label{font-size:10px;color:#9daec7}.field input{width:100%;height:31px;border:1px solid #ffffff24;border-radius:6px;background:#080d16;color:#edf2ff;padding:0 8px;font:12px ui-monospace,monospace}.field input[type=range]{padding:0;accent-color:#65dfff}.field output{text-align:right;color:#e9f4ff;font-variant-numeric:tabular-nums;font-size:11px}
+  button{height:33px;border:1px solid #ffffff2a;border-radius:6px;background:#ffffff11;color:#edf2ff;padding:0 11px;font:12px inherit;cursor:pointer}button:hover{background:#65dfff20;border-color:#65dfff66}.actions{display:flex;gap:7px;align-items:end}.status{grid-column:1/-1;min-height:15px;font-size:11px;color:#83d5f1}.status.error{color:#ff9a9a}
+  .grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:minmax(320px,48vh) minmax(280px,40vh);gap:12px}.view{position:relative;min-width:0;min-height:0;border:1px solid #ffffff20;border-radius:10px;overflow:hidden;background:#080d17}.view.focused{border-color:#67deff;box-shadow:0 0 0 1px #67deff44,0 0 24px #36b9ef22}.view canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.view .overlay{pointer-events:none}.caption{position:absolute;z-index:2;left:12px;top:10px;padding:5px 8px;border-radius:5px;background:#050912bd;color:#d8e6fa;font-size:11px;pointer-events:none}.hint{position:absolute;z-index:2;right:10px;bottom:8px;padding:4px 7px;border-radius:4px;background:#050912b8;color:#8698b4;font-size:10px;pointer-events:none}
+  @media(max-width:850px){body{padding:9px}.controls{grid-template-columns:repeat(2,minmax(130px,1fr))}.grid{grid-template-rows:40vh 32vh 32vh;grid-template-columns:1fr}.three{grid-row:auto}.top{align-items:start;flex-direction:column}}
+  @media(max-width:480px){.controls{grid-template-columns:1fr 1fr}.grid{grid-template-rows:38vh 30vh 30vh 30vh}.field.expr{grid-column:1/-1}}
+</style>
+</head>
+<body><main>
+  <header class="top"><div><h1>Magnetic field of a current</h1><div class="intro">Biot–Savart field from a parameterized wire · current follows increasing t · expressions accept Math.sin(t), powers, and pi</div></div></header>
+  <section class="controls" aria-label="Current and wire controls">
+    <div class="field expr"><label for="fx">x(t)</label><input id="fx" value="1.4*cos(t)" spellcheck="false"></div>
+    <div class="field expr"><label for="fy">y(t)</label><input id="fy" value="1.4*sin(t)" spellcheck="false"></div>
+    <div class="field expr"><label for="fz">z(t)</label><input id="fz" value="0.12*t" spellcheck="false"></div>
+    <div class="field"><label for="current">Current I (A)</label><input id="current" type="number" value="1.5" min="-20" max="20" step="0.1"></div>
+    <div class="field"><label for="trange">t range (start, end)</label><div style="display:flex;gap:5px"><input id="tmin" value="-6*pi" aria-label="Parameter start"><input id="tmax" value="6*pi" aria-label="Parameter end"></div></div>
+    <div class="actions"><button id="apply" type="button">Update wire</button><button id="reset" type="button">Reset to origin</button></div>
+    <div class="status" id="status">Click the 3D view to focus it. Drag to look; use WASD to move. R resets the camera.</div>
+  </section>
+  <section class="grid">
+    <div class="view three" id="view3d"><div class="caption">3D vector volume · click to focus</div><canvas id="glview" aria-label="Three dimensional magnetic field arrows throughout a volume"></canvas><canvas class="overlay" id="wireOverlay"></canvas><div class="hint">drag: look · WASD: move · R: reset</div></div>
+    <div class="view"><div class="caption">xy slice · z = 0</div><canvas id="xy" aria-label="Magnetic field vectors in the xy plane"></canvas></div>
+    <div class="view"><div class="caption">xz slice · y = 0</div><canvas id="xz" aria-label="Magnetic field vectors in the xz plane"></canvas></div>
+    <div class="view"><div class="caption">yz slice · x = 0</div><canvas id="yz" aria-label="Magnetic field vectors in the yz plane"></canvas></div>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $=id=>document.getElementById(id), fx=$('fx'),fy=$('fy'),fz=$('fz'),currentInput=$('current'),tminInput=$('tmin'),tmaxInput=$('tmax'),status=$('status');
+  const canvases={xy:$('xy'),xz:$('xz'),yz:$('yz')}; let wire=[],segments=[],current=1.5,gl=null,glProgram=null,glArrowProgram=null,arrowBuffer=null,focused=false,dragging=false,lastPointer=null;
+  const camera={pos:[4.2,3.17,7.39],yaw:-.52,pitch:-.36};
+  const defaults={pos:[4.2,3.17,7.39],yaw:-.52,pitch:-.36};
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2], cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]], add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]], sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], mul=(a,s)=>a.map(v=>v*s), norm=a=>Math.hypot(...a), normalize=a=>mul(a,1/(norm(a)||1));
+  function parseExpr(source){
+    source=source.replace(/Math\s*\.\s*PI\b/g,'pi').replace(/Math\s*\.\s*/g,'');
+    const tokens=source.match(/(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|[A-Za-z_][A-Za-z_0-9]*|\*\*|[()+\-*\/,^]/gi);
+    if(!tokens||tokens.join('').replace(/\s/g,'')!==source.replace(/\s/g,''))throw Error('Unsupported characters in expression');
+    let i=0;const peek=()=>tokens[i],take=()=>tokens[i++];
+    const funcs={sin:Math.sin,cos:Math.cos,tan:Math.tan,asin:Math.asin,acos:Math.acos,atan:Math.atan,sqrt:Math.sqrt,abs:Math.abs,exp:Math.exp,log:Math.log,log10:Math.log10,floor:Math.floor,ceil:Math.ceil,min:Math.min,max:Math.max,pow:Math.pow};
+    function primary(){const t=take();if(t==='+' )return unary();if(t==='-')return -unary();if(t==='('){const v=expr();if(take()!==')')throw Error('Missing closing parenthesis');return v;}if(t&&/^\d/.test(t))return Number(t);if(t==='t')return variable;if(t==='pi')return Math.PI;if(t==='e')return Math.E;if(t in funcs&&peek()==='('){take();const args=[];if(peek()!==')'){do{args.push(expr());if(peek()!==',')break;take();}while(true);}if(take()!==')')throw Error('Missing ) after function');return funcs[t](...args);}throw Error(`Unknown name “${t||''}”`);}
+    function unary(){return primary();}
+    function power(){let a=primary();if(peek()==='^'||peek()==='**'){take();a=a**unary();}return a;}
+    function term(){let a=power();while(peek()==='*'||peek()==='/'){const op=take(),b=power();a=op==='*'?a*b:a/b;}return a;}
+    function expr(){let a=term();while(peek()==='+'||peek()==='-'){const op=take(),b=term();a=op==='+'?a+b:a-b;}return a;}
+    let variable=0;const fn=t=>{variable=t;i=0;const v=expr();if(i!==tokens.length)throw Error(`Unexpected “${tokens[i]}”`);if(!Number.isFinite(v))throw Error('Expression is not finite');return v;};fn(0);return fn;
+  }
+  function vecAt(t, funcs){return [funcs[0](t),funcs[1](t),funcs[2](t)];}
+  function updateWire(){
+    try{
+      const funcs=[parseExpr(fx.value),parseExpr(fy.value),parseExpr(fz.value)],a=parseExpr(tminInput.value)(0),b=parseExpr(tmaxInput.value)(0),I=Number(currentInput.value);
+      if(!Number.isFinite(I))throw Error('Current must be a finite number');if(!Number.isFinite(a+b)||Math.abs(b-a)<1e-6)throw Error('Parameter range must have distinct finite endpoints');
+      const n=260;wire=Array.from({length:n+1},(_,i)=>vecAt(a+(b-a)*i/n,funcs));segments=[];for(let i=0;i<n;i++)segments.push([wire[i],wire[i+1]]);current=I;status.className='status';status.textContent=`${n} wire segments · I = ${current.toFixed(2)} A · coordinates in m · Biot–Savart field in T`;render();
+    }catch(e){status.className='status error';status.textContent=e.message;}
+  }
+  function magneticField(p){let B=[0,0,0];for(const [a,b] of segments){const dl=sub(b,a),mid=mul(add(a,b),.5),R=sub(p,mid),r2=Math.max(dot(R,R),.025);B=add(B,mul(cross(dl,R),1e-7*current/(r2*Math.sqrt(r2))));}return B;}
+  function cameraBasis(){const cp=Math.cos(camera.pitch),sp=Math.sin(camera.pitch),sy=Math.sin(camera.yaw),cy=Math.cos(camera.yaw);const forward=[sy*cp,sp,-cy*cp],right=[cy,0,sy],up=normalize(cross(right,forward));return {forward,right,up};}
+  function compile(gl,type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){console.error(gl.getShaderInfoLog(s));return null;}return s;}
+  function initGL(){const canvas=$('glview');gl=canvas.getContext('webgl2',{alpha:false,antialias:true});if(!gl){status.className='status error';status.textContent='WebGL2 is unavailable in this browser.';return;}
+    const fullscreen=`#version 300 es\nvoid main(){vec2 p=vec2((gl_VertexID==1)?3.0:-1.0,(gl_VertexID==2)?3.0:-1.0);gl_Position=vec4(p,0,1);}`;
+    const background=`#version 300 es\nprecision highp float;uniform vec2 u_resolution;out vec4 outColor;void main(){float y=gl_FragCoord.y/u_resolution.y;vec3 a=vec3(.025,.039,.066),b=vec3(.045,.071,.112);outColor=vec4(mix(a,b,smoothstep(0.,1.,y)),1.);}`;
+    const arrowVertex=`#version 300 es
+      precision highp float;in vec3 a_position;uniform vec3 u_camera,u_forward,u_right,u_up;uniform float u_aspect;
+      void main(){vec3 rel=a_position-u_camera;float depth=dot(rel,u_forward);float x=dot(rel,u_right),y=dot(rel,u_up);float near=.08,far=100.;float z=(far+near)/(far-near)*depth-(2.*far*near)/(far-near);gl_Position=vec4(x*1.8/u_aspect,y*1.8,z,depth);}`;
+    const arrowFragment=`#version 300 es
+      precision highp float;out vec4 outColor;
+      void main(){outColor=vec4(.35,.82,1.,1.);}`;
+    const vbg=compile(gl,gl.VERTEX_SHADER,fullscreen),fbg=compile(gl,gl.FRAGMENT_SHADER,background);if(!vbg||!fbg)return;glProgram=gl.createProgram();gl.attachShader(glProgram,vbg);gl.attachShader(glProgram,fbg);gl.linkProgram(glProgram);if(!gl.getProgramParameter(glProgram,gl.LINK_STATUS)){console.error(gl.getProgramInfoLog(glProgram));glProgram=null;return;}
+    const va=compile(gl,gl.VERTEX_SHADER,arrowVertex),fa=compile(gl,gl.FRAGMENT_SHADER,arrowFragment);if(!va||!fa)return;glArrowProgram=gl.createProgram();gl.attachShader(glArrowProgram,va);gl.attachShader(glArrowProgram,fa);gl.linkProgram(glArrowProgram);if(!gl.getProgramParameter(glArrowProgram,gl.LINK_STATUS)){console.error(gl.getProgramInfoLog(glArrowProgram));glArrowProgram=null;return;}arrowBuffer=gl.createBuffer();gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  }
+  function resizeGL(){const c=$('glview'),r=c.getBoundingClientRect(),dpr=1;c.width=Math.max(1,Math.floor(r.width*dpr));c.height=Math.max(1,Math.floor(r.height*dpr));if(gl)gl.viewport(0,0,c.width,c.height);const o=$('wireOverlay');o.width=c.width;o.height=c.height;o.style.width=r.width+'px';o.style.height=r.height+'px';}
+  function render3d(){if(!gl||!glProgram||!glArrowProgram)return;resizeGL();const c=$('glview'),w=c.width,h=c.height,basis=cameraBasis();gl.viewport(0,0,w,h);gl.clearColor(.02,.03,.05,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);gl.useProgram(glProgram);gl.uniform2f(gl.getUniformLocation(glProgram,'u_resolution'),w,h);gl.drawArrays(gl.TRIANGLES,0,3);gl.clear(gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
+    const points=[],extent=4.5,step=1.5;let max=0;for(let z=-extent;z<=extent+.001;z+=step)for(let y=-extent;y<=extent+.001;y+=step)for(let x=-extent;x<=extent+.001;x+=step){const p=[x,y,z],B=magneticField(p),m=norm(B);if(m>max)max=m;points.push({p,B,m});}
+    const vertices=[];const line=(a,b)=>{vertices.push(...a,...b);};
+    for(const sample of points){if(sample.m<1e-14)continue;const dir=mul(sample.B,1/sample.m),len=.30+.64*Math.sqrt(sample.m/(max||1)),tail=sub(sample.p,mul(dir,len*.46)),tip=add(sample.p,mul(dir,len*.46)),ref=Math.abs(dir[1])<.88?[0,1,0]:[1,0,0],side=mul(normalize(cross(dir,ref)),len*.14),back=sub(tip,mul(dir,len*.28));line(tail,tip);line(tip,add(back,side));line(tip,sub(back,side));}
+    const array=new Float32Array(vertices);gl.bindBuffer(gl.ARRAY_BUFFER,arrowBuffer);gl.bufferData(gl.ARRAY_BUFFER,array,gl.DYNAMIC_DRAW);gl.useProgram(glArrowProgram);gl.uniform3fv(gl.getUniformLocation(glArrowProgram,'u_camera'),camera.pos);gl.uniform3fv(gl.getUniformLocation(glArrowProgram,'u_forward'),basis.forward);gl.uniform3fv(gl.getUniformLocation(glArrowProgram,'u_right'),basis.right);gl.uniform3fv(gl.getUniformLocation(glArrowProgram,'u_up'),basis.up);gl.uniform1f(gl.getUniformLocation(glArrowProgram,'u_aspect'),w/h);const pos=gl.getAttribLocation(glArrowProgram,'a_position');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,3,gl.FLOAT,false,0,0);gl.depthMask(true);gl.drawArrays(gl.LINES,0,vertices.length/3);drawWireOverlay(basis);
+  }
+  function drawWireOverlay(basis){const c=$('wireOverlay'),ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);const focal=h*.9;let drawing=false;ctx.beginPath();for(const p of wire){const rel=sub(p,camera.pos),depth=dot(rel,basis.forward);if(depth<=.08){drawing=false;continue;}const x=w*.5+dot(rel,basis.right)*focal/depth,y=h*.5-dot(rel,basis.up)*focal/depth;if(!drawing){ctx.moveTo(x,y);drawing=true;}else ctx.lineTo(x,y);}ctx.strokeStyle='#ffd078';ctx.lineWidth=2;ctx.shadowColor='#ffb84d';ctx.shadowBlur=7;ctx.stroke();ctx.shadowBlur=0;}
+  function drawSlice(key){const c=canvases[key],ctx=c.getContext('2d'),rect=c.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);c.width=Math.max(1,Math.floor(rect.width*dpr));c.height=Math.max(1,Math.floor(rect.height*dpr));ctx.setTransform(dpr,0,0,dpr,0,0);const w=rect.width,h=rect.height;ctx.fillStyle='#080d17';ctx.fillRect(0,0,w,h);const half=4.8,scale=Math.min(w,h)*.46/half,cx=w/2,cy=h/2;let axes,plane;
+    if(key==='xy'){axes=[0,1];plane=p=>[p[0],p[1]];}else if(key==='xz'){axes=[0,2];plane=p=>[p[0],p[2]];}else{axes=[1,2];plane=p=>[p[1],p[2]];}
+    ctx.strokeStyle='#ffffff21';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,cy);ctx.lineTo(w,cy);ctx.moveTo(cx,0);ctx.lineTo(cx,h);ctx.stroke();ctx.fillStyle='#9fb0c8';ctx.font='10px system-ui';ctx.fillText(axes[0]===0?'x':'y',w-13,cy-6);ctx.fillText(axes[1]===1?'y':'z',cx+6,12);
+    const nx=Math.max(7,Math.floor(w/43)),ny=Math.max(6,Math.floor(h/39)),samples=[];let max=0;
+    for(let j=1;j<ny;j++)for(let i=1;i<nx;i++){const x=(i/nx*2-1)*half,y=(j/ny*2-1)*half,p=[0,0,0];p[axes[0]]=x;p[axes[1]]=y;const B=magneticField(p),u=B[axes[0]],v=B[axes[1]],m=Math.hypot(u,v);samples.push({x:cx+x*scale,y:cy-y*scale,u,v,m});max=Math.max(max,m);}
+    for(const a of samples){if(!a.m)continue;const ux=a.u/a.m,uy=-a.v/a.m,len=4+12*Math.sqrt(a.m/(max||1)),ex=a.x+ux*len,ey=a.y+uy*len,head=Math.min(5,len*.4);ctx.strokeStyle='#71d8ffcc';ctx.fillStyle='#71d8ffcc';ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(a.x-ux*2,a.y-uy*2);ctx.lineTo(ex,ey);ctx.stroke();ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-ux*head-uy*head*.55,ey-uy*head+ux*head*.55);ctx.lineTo(ex-ux*head+uy*head*.55,ey-uy*head-ux*head*.55);ctx.closePath();ctx.fill();}
+    // Display the wire's orthogonal projection as a reference curve.
+    ctx.beginPath();wire.forEach((p,i)=>{const q=plane(p),x=cx+q[0]*scale,y=cy-q[1]*scale;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.strokeStyle='#ffd078b8';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);
+  }
+  function render(){render3d();Object.keys(canvases).forEach(drawSlice);}
+  function resetCamera(){camera.pos=[...defaults.pos];camera.yaw=defaults.yaw;camera.pitch=defaults.pitch;render();}
+  $('apply').addEventListener('click',updateWire);$('reset').addEventListener('click',resetCamera);Object.values(canvases).forEach(c=>c.addEventListener('pointerdown',()=>{focused=false;$('view3d').classList.remove('focused');}));
+  const view=$('view3d');view.addEventListener('pointerdown',e=>{focused=true;dragging=true;lastPointer=[e.clientX,e.clientY];view.classList.add('focused');view.setPointerCapture(e.pointerId);});view.addEventListener('pointermove',e=>{if(!dragging||!lastPointer)return;const dx=e.clientX-lastPointer[0],dy=e.clientY-lastPointer[1];lastPointer=[e.clientX,e.clientY];camera.yaw-=dx*.006;camera.pitch=Math.max(-1.45,Math.min(1.45,camera.pitch-dy*.006));render();});view.addEventListener('pointerup',()=>{dragging=false;lastPointer=null;});view.addEventListener('pointercancel',()=>{dragging=false;lastPointer=null;});
+  window.addEventListener('keydown',e=>{if(!focused||/INPUT|TEXTAREA/.test(document.activeElement.tagName))return;const basis=cameraBasis(),speed=e.shiftKey?.6:.22;let move=[0,0,0];if(e.key.toLowerCase()==='w')move=mul(basis.forward,speed);if(e.key.toLowerCase()==='s')move=mul(basis.forward,-speed);if(e.key.toLowerCase()==='a')move=mul(basis.right,-speed);if(e.key.toLowerCase()==='d')move=mul(basis.right,speed);if(e.key.toLowerCase()==='r'){resetCamera();return;}if(norm(move)){camera.pos=add(camera.pos,move);render();e.preventDefault();}});
+  window.addEventListener('resize',render);initGL();updateWire();if(!gl||!glProgram){status.className='status error';status.textContent='WebGL2 shader view unavailable: the cross sections remain available.';}
+})();
+</script></body></html>

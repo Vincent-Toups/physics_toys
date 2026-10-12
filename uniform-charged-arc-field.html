@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Uniform Charged Arc Electric Field</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05070b;
+      color: #edf2ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #141b2a 0%, #06080d 58%, #020306 100%);
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2;
+      width: min(350px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(7, 10, 18, 0.74);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      user-select: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 108px 1fr 54px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 12px;
+    }
+
+    .row + .row {
+      margin-top: 8px;
+    }
+
+    label {
+      color: #b9c5db;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #69e2ff;
+    }
+
+    output {
+      color: #edf2ff;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2ff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    button.active {
+      background: rgba(105, 226, 255, 0.18);
+      border-color: rgba(105, 226, 255, 0.34);
+    }
+
+    .readout {
+      margin-left: auto;
+      color: #90a0bb;
+      font-size: 12px;
+      line-height: 34px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: #90a0bb;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 520px) {
+      .panel {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+      }
+
+      .row {
+        grid-template-columns: 92px 1fr 46px;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Electric field of a uniformly charged semicircular arc from pi over two to three pi over two"></canvas>
+
+  <div class="panel">
+    <div class="row">
+      <label for="density">Charge</label>
+      <input id="density" type="range" min="-3" max="3" step="0.1" value="1">
+      <output id="densityOut">+1.0</output>
+    </div>
+    <div class="row">
+      <label for="scale">Field scale</label>
+      <input id="scale" type="range" min="10" max="180" step="1" value="72">
+      <output id="scaleOut">72</output>
+    </div>
+    <div class="row">
+      <label for="spacing">Arrows</label>
+      <input id="spacing" type="range" min="20" max="70" step="2" value="34">
+      <output id="spacingOut">34</output>
+    </div>
+    <div class="row">
+      <label for="pointCount">Point N</label>
+      <input id="pointCount" type="range" min="2" max="80" step="1" value="12">
+      <output id="pointCountOut">12</output>
+    </div>
+    <div class="buttons">
+      <button id="toggleMode" class="active" type="button">Field</button>
+      <button id="toggleSource" type="button">Discrete</button>
+      <button id="resetProbe" type="button">Reset probe</button>
+      <span class="readout" id="readout">E = 0.00</span>
+    </div>
+    <div class="hint">Uniform arc: R = 1, θ = π/2 to 3π/2. Toggle field arrows or grayscale potential; drag the sample point to inspect values.</div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const potentialCanvas = document.createElement("canvas");
+      const potentialCtx = potentialCanvas.getContext("2d", { alpha: false });
+
+      const controls = {
+        density: document.getElementById("density"),
+        scale: document.getElementById("scale"),
+        spacing: document.getElementById("spacing"),
+        pointCount: document.getElementById("pointCount"),
+      };
+
+      const outputs = {
+        density: document.getElementById("densityOut"),
+        scale: document.getElementById("scaleOut"),
+        spacing: document.getElementById("spacingOut"),
+        pointCount: document.getElementById("pointCountOut"),
+      };
+
+      const toggleModeButton = document.getElementById("toggleMode");
+      const toggleSourceButton = document.getElementById("toggleSource");
+      const resetProbeButton = document.getElementById("resetProbe");
+      const readout = document.getElementById("readout");
+
+      let width = 0;
+      let height = 0;
+      let pixelScale = 1;
+      let unitScale = 1;
+      let originX = 0;
+      let originY = 0;
+      let mode = "field";
+      let sourceMode = "continuous";
+      let draggingProbe = false;
+      let probe = { x: 0.35, y: 0 };
+      let potentialDirty = true;
+      let sourceCache = { key: "", points: [] };
+
+      const config = {
+        arcRadius: 1,
+        theta0: Math.PI * 0.5,
+        theta1: Math.PI * 1.5,
+        samples: 360,
+        potentialSamples: 180,
+        potentialCellSize: 4,
+        softening: 0.0025,
+      };
+
+      function formatSigned(value, digits = 1) {
+        if (Math.abs(value) < 0.0005) return Number(0).toFixed(digits);
+        return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+      }
+
+      function resize() {
+        pixelScale = Math.max(1, window.devicePixelRatio || 1);
+        width = Math.floor(window.innerWidth);
+        height = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(width * pixelScale);
+        canvas.height = Math.floor(height * pixelScale);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+        unitScale = Math.min(width, height) * 0.255;
+        originX = width * 0.54;
+        originY = height * 0.53;
+        potentialCanvas.width = Math.max(1, Math.ceil(width / config.potentialCellSize));
+        potentialCanvas.height = Math.max(1, Math.ceil(height / config.potentialCellSize));
+        potentialDirty = true;
+        draw();
+      }
+
+      function toScreen(point) {
+        return {
+          x: originX + point.x * unitScale,
+          y: originY - point.y * unitScale,
+        };
+      }
+
+      function toWorld(point) {
+        return {
+          x: (point.x - originX) / unitScale,
+          y: (originY - point.y) / unitScale,
+        };
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function fieldAt(x, y) {
+        const lambda = Number(controls.density.value);
+        if (Math.abs(lambda) < 0.0001) return { x: 0, y: 0 };
+
+        let ex = 0;
+        let ey = 0;
+        const points = sourcePoints(config.samples);
+
+        for (const point of points) {
+          const dx = x - point.x;
+          const dy = y - point.y;
+          const r2 = Math.max(dx * dx + dy * dy, config.softening);
+          const invR = 1 / Math.sqrt(r2);
+          ex += point.q * dx * invR / r2;
+          ey += point.q * dy * invR / r2;
+        }
+
+        return { x: ex, y: ey };
+      }
+
+      function sourcePoints(fallbackSamples) {
+        const lambda = Number(controls.density.value);
+        const count = sourceMode === "discrete" ? Number(controls.pointCount.value) : fallbackSamples;
+        const key = `${sourceMode}:${lambda}:${count}`;
+
+        if (sourceCache.key === key) {
+          return sourceCache.points;
+        }
+
+        const dTheta = (config.theta1 - config.theta0) / count;
+        const points = [];
+
+        for (let i = 0; i < count; i += 1) {
+          const theta = config.theta0 + (i + 0.5) * dTheta;
+          points.push({
+            x: config.arcRadius * Math.cos(theta),
+            y: config.arcRadius * Math.sin(theta),
+            q: lambda * config.arcRadius * dTheta,
+            theta,
+          });
+        }
+
+        sourceCache = { key, points };
+        return points;
+      }
+
+      function potentialAt(x, y) {
+        const lambda = Number(controls.density.value);
+        if (Math.abs(lambda) < 0.0001) return 0;
+
+        let potential = 0;
+        const points = sourcePoints(config.potentialSamples);
+
+        for (const point of points) {
+          const dx = x - point.x;
+          const dy = y - point.y;
+          const r = Math.sqrt(Math.max(dx * dx + dy * dy, config.softening));
+          potential += point.q / r;
+        }
+
+        return potential;
+      }
+
+      function drawArrow(x, y, vx, vy, length, color, lineWidth = 1) {
+        const magnitude = Math.hypot(vx, vy);
+        if (magnitude < 0.000001) return;
+
+        const ux = vx / magnitude;
+        const uy = vy / magnitude;
+        const endX = x + ux * length;
+        const endY = y - uy * length;
+        const startX = x - ux * length * 0.35;
+        const startY = y + uy * length * 0.35;
+        const sideX = -uy;
+        const sideY = -ux;
+        const head = Math.max(5, Math.min(12, length * 0.32));
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - ux * head + sideX * head * 0.55, endY + uy * head + sideY * head * 0.55);
+        ctx.lineTo(endX - ux * head - sideX * head * 0.55, endY + uy * head - sideY * head * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = "#05070b";
+        ctx.fillRect(0, 0, width, height);
+
+        const gradient = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.75);
+        gradient.addColorStop(0, "#141b2a");
+        gradient.addColorStop(0.58, "#06080d");
+        gradient.addColorStop(1, "#020306");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      function drawGrid() {
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.08)";
+        ctx.lineWidth = 1;
+
+        for (let x = originX % unitScale; x < width; x += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+
+        for (let y = originY % unitScale; y < height; y += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.26)";
+        ctx.beginPath();
+        ctx.moveTo(0, originY);
+        ctx.lineTo(width, originY);
+        ctx.moveTo(originX, 0);
+        ctx.lineTo(originX, height);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawField() {
+        const spacing = Number(controls.spacing.value);
+        const fieldScale = Number(controls.scale.value);
+
+        for (let sy = spacing * 0.5; sy < height; sy += spacing) {
+          for (let sx = spacing * 0.5; sx < width; sx += spacing) {
+            const world = toWorld({ x: sx, y: sy });
+            const field = fieldAt(world.x, world.y);
+            const magnitude = Math.hypot(field.x, field.y);
+            if (magnitude < 0.0005) continue;
+
+            const strength = Math.min(1, Math.log(1 + magnitude * fieldScale * 0.32) / 4.2);
+            const length = 4 + 16 * Math.pow(strength, 0.55);
+            const brightness = Math.pow(strength, 0.72);
+            const alpha = 0.18 + brightness * 0.62;
+            const red = Math.round(36 + brightness * 210);
+            const green = Math.round(92 + brightness * 145);
+            const blue = Math.round(132 + brightness * 118);
+
+            drawArrow(sx, sy, field.x, field.y, length, `rgba(${red}, ${green}, ${blue}, ${alpha})`, 0.7 + brightness * 0.9);
+          }
+        }
+      }
+
+      function renderPotentialMap() {
+        const mapWidth = potentialCanvas.width;
+        const mapHeight = potentialCanvas.height;
+        const image = potentialCtx.createImageData(mapWidth, mapHeight);
+        const data = image.data;
+        const values = new Float32Array(mapWidth * mapHeight);
+        let minValue = Infinity;
+        let maxValue = -Infinity;
+
+        for (let py = 0; py < mapHeight; py += 1) {
+          for (let px = 0; px < mapWidth; px += 1) {
+            const screenX = (px + 0.5) * config.potentialCellSize;
+            const screenY = (py + 0.5) * config.potentialCellSize;
+            const world = toWorld({ x: screenX, y: screenY });
+            const potential = potentialAt(world.x, world.y);
+            const compressed = Math.sign(potential) * Math.log1p(Math.abs(potential));
+            const index = py * mapWidth + px;
+            values[index] = compressed;
+            minValue = Math.min(minValue, compressed);
+            maxValue = Math.max(maxValue, compressed);
+          }
+        }
+
+        const range = Math.max(0.0001, maxValue - minValue);
+
+        for (let i = 0; i < values.length; i += 1) {
+          const normalized = (values[i] - minValue) / range;
+          const gray = Math.round(18 + normalized * 226);
+          const offset = i * 4;
+          data[offset] = gray;
+          data[offset + 1] = gray;
+          data[offset + 2] = gray;
+          data[offset + 3] = 255;
+        }
+
+        potentialCtx.putImageData(image, 0, 0);
+        potentialDirty = false;
+      }
+
+      function drawPotential() {
+        if (potentialDirty) {
+          renderPotentialMap();
+        }
+
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(potentialCanvas, 0, 0, width, height);
+        ctx.restore();
+      }
+
+      function drawArc() {
+        const density = Number(controls.density.value);
+        const radiusPx = config.arcRadius * unitScale;
+        const positive = density >= 0;
+        const color = positive ? "#ff5a78" : "#4ea9ff";
+        const glow = positive ? "rgba(255, 86, 117, 0.55)" : "rgba(78, 169, 255, 0.55)";
+
+        ctx.save();
+
+        if (sourceMode === "continuous") {
+          ctx.shadowColor = glow;
+          ctx.shadowBlur = 18;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 9;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.arc(originX, originY, radiusPx, -config.theta1, -config.theta0, false);
+          ctx.stroke();
+
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.62)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(originX, originY, radiusPx, -config.theta1, -config.theta0, false);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = "rgba(237, 242, 255, 0.24)";
+          ctx.lineWidth = 1.25;
+          ctx.setLineDash([5, 7]);
+          ctx.beginPath();
+          ctx.arc(originX, originY, radiusPx, -config.theta1, -config.theta0, false);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        const markerPoints = sourceMode === "continuous"
+          ? sourcePoints(13)
+          : sourcePoints(Number(controls.pointCount.value));
+
+        for (const point of markerPoints) {
+          const p = toScreen(point);
+          const markerRadius = sourceMode === "continuous" ? 8 : Math.max(5, Math.min(13, 30 / Math.sqrt(markerPoints.length)));
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "700 14px Inter, ui-sans-serif, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, markerRadius, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+          if (markerRadius >= 7) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillText(positive ? "+" : "-", p.x, p.y - 0.5);
+          }
+        }
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.82)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("R = 1", originX, originY + radiusPx + 22);
+        ctx.restore();
+      }
+
+      function drawProbe() {
+        const screen = toScreen(probe);
+        const field = fieldAt(probe.x, probe.y);
+        const potential = potentialAt(probe.x, probe.y);
+        const magnitude = Math.hypot(field.x, field.y);
+        const fieldScale = Number(controls.scale.value);
+        const length = Math.min(90, 12 + Math.log(1 + magnitude * fieldScale * 0.55) * 18);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 244, 180, 0.92)";
+        ctx.fillStyle = "rgba(255, 244, 180, 0.92)";
+        drawArrow(screen.x, screen.y, field.x, field.y, length, "rgba(255, 244, 180, 0.92)", 2.2);
+
+        ctx.shadowColor = "rgba(255, 244, 180, 0.7)";
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = "#fff4b4";
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.86)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        readout.textContent = mode === "field" ? `E = ${magnitude.toFixed(2)}` : `V = ${potential.toFixed(2)}  E = ${magnitude.toFixed(2)}`;
+      }
+
+      function draw() {
+        drawBackground();
+        if (mode === "potential") {
+          drawPotential();
+        }
+        drawGrid();
+        if (mode === "field") {
+          drawField();
+        }
+        drawArc();
+        drawProbe();
+      }
+
+      function updateLabels() {
+        outputs.density.textContent = formatSigned(Number(controls.density.value), 1);
+        outputs.scale.textContent = controls.scale.value;
+        outputs.spacing.textContent = controls.spacing.value;
+        outputs.pointCount.textContent = controls.pointCount.value;
+        potentialDirty = true;
+        toggleModeButton.textContent = mode === "field" ? "Field" : "Potential";
+        toggleModeButton.classList.toggle("active", mode === "field");
+        toggleSourceButton.textContent = sourceMode === "continuous" ? "Discrete" : `N = ${controls.pointCount.value}`;
+        toggleSourceButton.classList.toggle("active", sourceMode === "discrete");
+        draw();
+      }
+
+      for (const control of Object.values(controls)) {
+        control.addEventListener("input", updateLabels);
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const pos = pointerPosition(event);
+        const probeScreen = toScreen(probe);
+        draggingProbe = Math.hypot(pos.x - probeScreen.x, pos.y - probeScreen.y) < 22;
+        if (draggingProbe) {
+          canvas.setPointerCapture(event.pointerId);
+          canvas.style.cursor = "grabbing";
+        }
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        const pos = pointerPosition(event);
+        const probeScreen = toScreen(probe);
+
+        if (draggingProbe) {
+          probe = toWorld(pos);
+          draw();
+          return;
+        }
+
+        canvas.style.cursor = Math.hypot(pos.x - probeScreen.x, pos.y - probeScreen.y) < 22 ? "grab" : "crosshair";
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        if (draggingProbe) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+        draggingProbe = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        draggingProbe = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      toggleModeButton.addEventListener("click", () => {
+        mode = mode === "field" ? "potential" : "field";
+        updateLabels();
+      });
+
+      toggleSourceButton.addEventListener("click", () => {
+        sourceMode = sourceMode === "continuous" ? "discrete" : "continuous";
+        updateLabels();
+      });
+
+      resetProbeButton.addEventListener("click", () => {
+        probe = { x: 0.35, y: 0 };
+        draw();
+      });
+
+      window.addEventListener("resize", resize);
+
+      resize();
+      updateLabels();
+    })();
+  </script>
+</body>
+</html>

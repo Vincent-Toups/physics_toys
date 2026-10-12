@@ -1,0 +1,879 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gauss Law Playground</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05070b;
+      color: #edf2ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #141b2a 0%, #06080d 58%, #020306 100%);
+      cursor: grab;
+      touch-action: none;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2;
+      width: min(360px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(7, 10, 18, 0.74);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      user-select: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 108px 1fr 54px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 12px;
+    }
+
+    .row + .row {
+      margin-top: 8px;
+    }
+
+    label {
+      color: #b9c5db;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #69e2ff;
+    }
+
+    output {
+      color: #edf2ff;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2ff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    button.active {
+      background: rgba(105, 226, 255, 0.18);
+      border-color: rgba(105, 226, 255, 0.34);
+    }
+
+    .readout {
+      flex: 1 1 100%;
+      color: #90a0bb;
+      font-size: 12px;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: #90a0bb;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 520px) {
+      .panel {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+      }
+
+      .row {
+        grid-template-columns: 92px 1fr 46px;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Gauss law playground with draggable circular surface and movable point charges"></canvas>
+
+  <div class="panel">
+    <div class="row">
+      <label for="charge">New charge</label>
+      <input id="charge" type="range" min="-3" max="3" step="0.1" value="1">
+      <output id="chargeOut">+1.0</output>
+    </div>
+    <div class="row">
+      <label for="radius">Surface R</label>
+      <input id="radius" type="range" min="0.45" max="2.2" step="0.05" value="0.45">
+      <output id="radiusOut">0.45</output>
+    </div>
+    <div class="row">
+      <label for="samples">Sample N</label>
+      <input id="samples" type="range" min="4" max="400" step="2" value="20">
+      <output id="samplesOut">20</output>
+    </div>
+    <div class="row">
+      <label for="scale">Field scale</label>
+      <input id="scale" type="range" min="12" max="180" step="1" value="72">
+      <output id="scaleOut">72</output>
+    </div>
+    <div class="buttons">
+      <button id="toggleMode" class="active" type="button">Field</button>
+      <button id="toggleShape" type="button">Circle</button>
+      <button id="resetSurface" type="button">Reset surface</button>
+      <button id="deleteCharge" type="button">Delete charge</button>
+      <div class="readout" id="readout">flux = 0.00</div>
+    </div>
+    <div class="hint">Click empty space to add charge. Drag charges or the yellow surface handle. Wheel a charge to change its sign; Shift-click or right-click deletes.</div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const potentialCanvas = document.createElement("canvas");
+      const potentialCtx = potentialCanvas.getContext("2d", { alpha: false });
+
+      const controls = {
+        charge: document.getElementById("charge"),
+        radius: document.getElementById("radius"),
+        samples: document.getElementById("samples"),
+        scale: document.getElementById("scale"),
+      };
+
+      const outputs = {
+        charge: document.getElementById("chargeOut"),
+        radius: document.getElementById("radiusOut"),
+        samples: document.getElementById("samplesOut"),
+        scale: document.getElementById("scaleOut"),
+      };
+
+      const toggleModeButton = document.getElementById("toggleMode");
+      const toggleShapeButton = document.getElementById("toggleShape");
+      const resetSurfaceButton = document.getElementById("resetSurface");
+      const deleteChargeButton = document.getElementById("deleteCharge");
+      const readout = document.getElementById("readout");
+
+      let width = 0;
+      let height = 0;
+      let pixelScale = 1;
+      let unitScale = 1;
+      let originX = 0;
+      let originY = 0;
+      let mode = "field";
+      let shape = "circle";
+      let pointer = { active: false, moved: false, target: "none", chargeIndex: -1, downX: 0, downY: 0 };
+      let potentialDirty = true;
+      let surface = { x: 0.85, y: 0.25 };
+      let fluxPlot = [];
+      let charges = [{ x: 0, y: 0, q: 1 }];
+      let selectedCharge = 0;
+
+      const config = {
+        softening: 0.0025,
+        potentialCellSize: 4,
+      };
+
+      function formatSigned(value, digits = 1) {
+        if (Math.abs(value) < 0.0005) return Number(0).toFixed(digits);
+        return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+      }
+
+      function resize() {
+        pixelScale = Math.max(1, window.devicePixelRatio || 1);
+        width = Math.floor(window.innerWidth);
+        height = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(width * pixelScale);
+        canvas.height = Math.floor(height * pixelScale);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+        unitScale = Math.min(width, height) * 0.18;
+        originX = width * 0.52;
+        originY = height * 0.53;
+        potentialCanvas.width = Math.max(1, Math.ceil(width / config.potentialCellSize));
+        potentialCanvas.height = Math.max(1, Math.ceil(height / config.potentialCellSize));
+        potentialDirty = true;
+        draw();
+      }
+
+      function toScreen(point) {
+        return {
+          x: originX + point.x * unitScale,
+          y: originY - point.y * unitScale,
+        };
+      }
+
+      function toWorld(point) {
+        return {
+          x: (point.x - originX) / unitScale,
+          y: (originY - point.y) / unitScale,
+        };
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function fieldAt(x, y) {
+        let ex = 0;
+        let ey = 0;
+
+        for (const charge of charges) {
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r2 = Math.max(dx * dx + dy * dy, config.softening);
+          ex += charge.q * dx / r2;
+          ey += charge.q * dy / r2;
+        }
+
+        return { x: ex, y: ey };
+      }
+
+      function potentialAt(x, y) {
+        let potential = 0;
+
+        for (const charge of charges) {
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r = Math.sqrt(Math.max(dx * dx + dy * dy, config.softening));
+          potential += -charge.q * Math.log(r);
+        }
+
+        return potential;
+      }
+
+      function drawArrow(x, y, vx, vy, length, color, lineWidth = 1) {
+        const magnitude = Math.hypot(vx, vy);
+        if (magnitude < 0.000001) return;
+
+        const ux = vx / magnitude;
+        const uy = vy / magnitude;
+        const endX = x + ux * length;
+        const endY = y - uy * length;
+        const startX = x - ux * length * 0.25;
+        const startY = y + uy * length * 0.25;
+        const sideX = -uy;
+        const sideY = -ux;
+        const head = Math.max(5, Math.min(12, length * 0.32));
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - ux * head + sideX * head * 0.55, endY + uy * head + sideY * head * 0.55);
+        ctx.lineTo(endX - ux * head - sideX * head * 0.55, endY + uy * head - sideY * head * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = "#05070b";
+        ctx.fillRect(0, 0, width, height);
+
+        const gradient = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.75);
+        gradient.addColorStop(0, "#141b2a");
+        gradient.addColorStop(0.58, "#06080d");
+        gradient.addColorStop(1, "#020306");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      function renderPotentialMap() {
+        const mapWidth = potentialCanvas.width;
+        const mapHeight = potentialCanvas.height;
+        const image = potentialCtx.createImageData(mapWidth, mapHeight);
+        const data = image.data;
+        const values = new Float32Array(mapWidth * mapHeight);
+        let minValue = Infinity;
+        let maxValue = -Infinity;
+
+        for (let py = 0; py < mapHeight; py += 1) {
+          for (let px = 0; px < mapWidth; px += 1) {
+            const screenX = (px + 0.5) * config.potentialCellSize;
+            const screenY = (py + 0.5) * config.potentialCellSize;
+            const world = toWorld({ x: screenX, y: screenY });
+            const potential = potentialAt(world.x, world.y);
+            const compressed = Math.sign(potential) * Math.log1p(Math.abs(potential));
+            const index = py * mapWidth + px;
+            values[index] = compressed;
+            minValue = Math.min(minValue, compressed);
+            maxValue = Math.max(maxValue, compressed);
+          }
+        }
+
+        const range = Math.max(0.0001, maxValue - minValue);
+
+        for (let i = 0; i < values.length; i += 1) {
+          const normalized = (values[i] - minValue) / range;
+          const gray = Math.round(18 + normalized * 226);
+          const offset = i * 4;
+          data[offset] = gray;
+          data[offset + 1] = gray;
+          data[offset + 2] = gray;
+          data[offset + 3] = 255;
+        }
+
+        potentialCtx.putImageData(image, 0, 0);
+        potentialDirty = false;
+      }
+
+      function drawPotential() {
+        if (potentialDirty) {
+          renderPotentialMap();
+        }
+
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(potentialCanvas, 0, 0, width, height);
+        ctx.restore();
+      }
+
+      function drawGrid() {
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.08)";
+        ctx.lineWidth = 1;
+
+        for (let x = originX % unitScale; x < width; x += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+
+        for (let y = originY % unitScale; y < height; y += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.26)";
+        ctx.beginPath();
+        ctx.moveTo(0, originY);
+        ctx.lineTo(width, originY);
+        ctx.moveTo(originX, 0);
+        ctx.lineTo(originX, height);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function chargeAt(screenX, screenY) {
+        for (let i = charges.length - 1; i >= 0; i -= 1) {
+          const screen = toScreen(charges[i]);
+          if (Math.hypot(screenX - screen.x, screenY - screen.y) <= 22) {
+            return i;
+          }
+        }
+
+        return -1;
+      }
+
+      function overSurfaceHandle(screenX, screenY) {
+        const center = toScreen(surface);
+        return Math.hypot(screenX - center.x, screenY - center.y) <= 24;
+      }
+
+      function drawCharges() {
+        for (let i = 0; i < charges.length; i += 1) {
+          const charge = charges[i];
+          const screen = toScreen(charge);
+          const positive = charge.q >= 0;
+          const color = positive ? "#ff5a78" : "#4ea9ff";
+          const glow = positive ? "rgba(255, 86, 117, 0.55)" : "rgba(78, 169, 255, 0.55)";
+          const radius = 12 + Math.min(7, Math.abs(charge.q) * 2.5);
+
+          ctx.save();
+          ctx.shadowColor = glow;
+          ctx.shadowBlur = 18;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = i === selectedCharge ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.78)";
+          ctx.lineWidth = i === selectedCharge ? 2.5 : 1.5;
+          ctx.stroke();
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "700 18px Inter, ui-sans-serif, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(positive ? "+" : "-", screen.x, screen.y - 1);
+          ctx.restore();
+        }
+      }
+
+      function shapeDimensions(radius) {
+        if (shape === "ellipse") {
+          return { a: radius * 1.55, b: radius * 0.72 };
+        }
+
+        return { a: radius, b: radius };
+      }
+
+      function sampleSurface(radius, sampleCount) {
+        const samples = [];
+        const dimensions = shapeDimensions(radius);
+
+        if (shape === "square") {
+          const side = radius * 2;
+          const perimeter = side * 4;
+          const ds = perimeter / sampleCount;
+
+          for (let i = 0; i < sampleCount; i += 1) {
+            const s = (i + 0.5) * ds;
+            let localX;
+            let localY;
+            let normal;
+
+            if (s < side) {
+              localX = -radius + s;
+              localY = radius;
+              normal = { x: 0, y: 1 };
+            } else if (s < side * 2) {
+              localX = radius;
+              localY = radius - (s - side);
+              normal = { x: 1, y: 0 };
+            } else if (s < side * 3) {
+              localX = radius - (s - side * 2);
+              localY = -radius;
+              normal = { x: 0, y: -1 };
+            } else {
+              localX = -radius;
+              localY = -radius + (s - side * 3);
+              normal = { x: -1, y: 0 };
+            }
+
+            samples.push({
+              point: { x: surface.x + localX, y: surface.y + localY },
+              normal,
+              ds,
+              theta: s / perimeter * Math.PI * 2,
+            });
+          }
+
+          return samples;
+        }
+
+        const dTheta = Math.PI * 2 / sampleCount;
+
+        for (let i = 0; i < sampleCount; i += 1) {
+          const theta = i * dTheta;
+          const cos = Math.cos(theta);
+          const sin = Math.sin(theta);
+          const localX = dimensions.a * cos;
+          const localY = dimensions.b * sin;
+          const normalRaw = shape === "ellipse"
+            ? { x: cos / dimensions.a, y: sin / dimensions.b }
+            : { x: cos, y: sin };
+          const normalLength = Math.hypot(normalRaw.x, normalRaw.y);
+          const normal = {
+            x: normalRaw.x / normalLength,
+            y: normalRaw.y / normalLength,
+          };
+          const ds = shape === "ellipse"
+            ? Math.hypot(dimensions.a * sin, dimensions.b * cos) * dTheta
+            : radius * dTheta;
+
+          samples.push({
+            point: { x: surface.x + localX, y: surface.y + localY },
+            normal,
+            ds,
+            theta,
+          });
+        }
+
+        return samples;
+      }
+
+      function chargeInsideSurface(charge, radius) {
+        const dimensions = shapeDimensions(radius);
+        const dx = charge.x - surface.x;
+        const dy = charge.y - surface.y;
+
+        if (shape === "ellipse") {
+          return (dx * dx) / (dimensions.a * dimensions.a) + (dy * dy) / (dimensions.b * dimensions.b) < 1;
+        }
+
+        if (shape === "square") {
+          return Math.abs(dx) < radius && Math.abs(dy) < radius;
+        }
+
+        return Math.hypot(dx, dy) < radius;
+      }
+
+      function enclosedChargeFor(radius) {
+        return charges.reduce((sum, charge) => sum + (chargeInsideSurface(charge, radius) ? charge.q : 0), 0);
+      }
+
+      function drawSurfaceBoundary(center, radius) {
+        const dimensions = shapeDimensions(radius);
+
+        ctx.beginPath();
+        if (shape === "ellipse") {
+          ctx.ellipse(center.x, center.y, dimensions.a * unitScale, dimensions.b * unitScale, 0, 0, Math.PI * 2);
+        } else if (shape === "square") {
+          const side = radius * 2 * unitScale;
+          ctx.rect(center.x - side * 0.5, center.y - side * 0.5, side, side);
+        } else {
+          ctx.arc(center.x, center.y, radius * unitScale, 0, Math.PI * 2);
+        }
+      }
+
+      function drawSurface() {
+        const radius = Number(controls.radius.value);
+        const sampleCount = Number(controls.samples.value);
+        const center = toScreen(surface);
+        const scale = Number(controls.scale.value);
+        const samples = sampleSurface(radius, sampleCount);
+        let flux = 0;
+        fluxPlot = [];
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.72)";
+        ctx.lineWidth = 2;
+        drawSurfaceBoundary(center, radius);
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.08)";
+        drawSurfaceBoundary(center, radius);
+        ctx.fill();
+
+        for (const sample of samples) {
+          const point = sample.point;
+          const normal = sample.normal;
+          const screen = toScreen(point);
+          const field = fieldAt(point.x, point.y);
+          const magnitude = Math.hypot(field.x, field.y);
+          const fieldLength = Math.min(64, 10 + Math.log(1 + magnitude * scale * 0.55) * 15);
+          const dot = field.x * normal.x + field.y * normal.y;
+          const contribution = dot * sample.ds;
+          flux += contribution;
+          fluxPlot.push({ theta: sample.theta, dot, contribution, cumulative: flux });
+
+          drawArrow(screen.x, screen.y, normal.x, normal.y, 20, "rgba(255, 244, 180, 0.92)", 1.8);
+          drawArrow(screen.x, screen.y, field.x, field.y, fieldLength, "rgba(105, 198, 255, 0.92)", 2);
+        }
+
+        ctx.shadowColor = "rgba(255, 244, 180, 0.55)";
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = "#fff4b4";
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.86)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        const enclosedCharge = enclosedChargeFor(radius);
+        const enclosed = charges.some((charge) => chargeInsideSurface(charge, radius));
+        const centerPotential = potentialAt(surface.x, surface.y);
+        const expectedFlux = Math.PI * 2 * enclosedCharge;
+        const prefix = mode === "potential" ? `V(center) = ${centerPotential.toFixed(2)}, ` : "";
+        readout.textContent = `${prefix}${shape} flux ≈ ${flux.toFixed(2)}, expected 2π(${enclosedCharge.toFixed(1)}) = ${expectedFlux.toFixed(2)}, enclosed: ${enclosed ? "yes" : "no"}`;
+      }
+
+      function drawFluxPlot() {
+        if (fluxPlot.length === 0) return;
+
+        const plotWidth = Math.min(360, Math.max(240, width * 0.32));
+        const plotHeight = 150;
+        const margin = 18;
+        const x = Math.max(16, width - plotWidth - 18);
+        const y = Math.max(16, height - plotHeight - 18);
+        const values = fluxPlot.map((sample) => sample.contribution);
+        const positiveSum = values.reduce((sum, value) => sum + Math.max(0, value), 0);
+        const negativeSum = values.reduce((sum, value) => sum + Math.min(0, value), 0);
+        const total = positiveSum + negativeSum;
+        const qEstimate = total / (Math.PI * 2);
+        const enclosedCharge = enclosedChargeFor(Number(controls.radius.value));
+        const expectedFlux = Math.PI * 2 * enclosedCharge;
+        const maxAbs = Math.max(0.0001, ...values.map((value) => Math.abs(value)));
+        const innerWidth = plotWidth - margin * 2;
+        const innerHeight = plotHeight - margin * 2;
+        const zeroY = y + margin + innerHeight * 0.5;
+        const barWidth = Math.max(1, innerWidth / values.length * 0.72);
+
+        function barX(index) {
+          return x + margin + (index + 0.5) / values.length * innerWidth;
+        }
+
+        ctx.save();
+        ctx.fillStyle = "rgba(7, 10, 18, 0.76)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x, y, plotWidth, plotHeight, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.18)";
+        ctx.beginPath();
+        ctx.moveTo(x + margin, zeroY);
+        ctx.lineTo(x + plotWidth - margin, zeroY);
+        ctx.stroke();
+
+        values.forEach((value, index) => {
+          const sx = barX(index);
+          const barHeight = Math.abs(value) / maxAbs * innerHeight * 0.46;
+          const top = value >= 0 ? zeroY - barHeight : zeroY;
+          ctx.fillStyle = value >= 0 ? "rgba(255, 244, 180, 0.9)" : "rgba(105, 198, 255, 0.9)";
+          ctx.fillRect(sx - barWidth * 0.5, top, barWidth, barHeight);
+        });
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.86)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText("signed terms E · n Δs", x + 12, y + 10);
+        ctx.fillStyle = "rgba(237, 242, 255, 0.78)";
+        ctx.fillText(`expected 2π(${enclosedCharge.toFixed(1)}) = ${expectedFlux.toFixed(2)}`, x + 12, y + 28);
+        ctx.textAlign = "right";
+        ctx.fillStyle = "rgba(144, 160, 187, 0.95)";
+        ctx.fillText(`+${positiveSum.toFixed(2)} ${negativeSum.toFixed(2)}`, x + plotWidth - 12, y + 10);
+        ctx.fillText(`Σ = 2π(${qEstimate.toFixed(2)})`, x + plotWidth - 12, y + 28);
+        ctx.restore();
+      }
+
+      function draw() {
+        drawBackground();
+        if (mode === "potential") {
+          drawPotential();
+        }
+        drawGrid();
+        drawCharges();
+        drawSurface();
+        drawFluxPlot();
+      }
+
+      function updateLabels() {
+        const sampleCount = Number(controls.samples.value);
+        if (sampleCount % 2 !== 0) {
+          controls.samples.value = String(sampleCount + 1);
+        }
+        outputs.charge.textContent = formatSigned(Number(controls.charge.value), 1);
+        outputs.radius.textContent = Number(controls.radius.value).toFixed(2);
+        outputs.samples.textContent = controls.samples.value;
+        outputs.scale.textContent = controls.scale.value;
+        potentialDirty = true;
+        toggleModeButton.textContent = mode === "field" ? "Field" : "Potential";
+        toggleModeButton.classList.toggle("active", mode === "field");
+        toggleShapeButton.textContent = shape[0].toUpperCase() + shape.slice(1);
+        deleteChargeButton.disabled = selectedCharge < 0;
+        draw();
+      }
+
+      for (const control of Object.values(controls)) {
+        control.addEventListener("input", updateLabels);
+      }
+
+      function addCharge(point) {
+        charges.push({ x: point.x, y: point.y, q: Number(controls.charge.value) });
+        selectedCharge = charges.length - 1;
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      function deleteSelectedCharge() {
+        if (selectedCharge < 0) return;
+        charges.splice(selectedCharge, 1);
+        selectedCharge = Math.min(selectedCharge, charges.length - 1);
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      function adjustCharge(index, delta, largeStep = false) {
+        if (index < 0 || !charges[index]) return;
+        const step = largeStep ? 1 : 0.25;
+        charges[index].q = Math.max(-8, Math.min(8, charges[index].q + delta * step));
+        if (Math.abs(charges[index].q) < 0.001) charges[index].q = 0;
+        selectedCharge = index;
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const pos = pointerPosition(event);
+        const hitCharge = chargeAt(pos.x, pos.y);
+        pointer = {
+          active: true,
+          moved: false,
+          target: "none",
+          chargeIndex: hitCharge,
+          downX: pos.x,
+          downY: pos.y,
+        };
+        canvas.setPointerCapture(event.pointerId);
+
+        if ((event.shiftKey || event.button === 2) && hitCharge >= 0) {
+          selectedCharge = hitCharge;
+          deleteSelectedCharge();
+          pointer.target = "deleted";
+          return;
+        }
+
+        if (hitCharge >= 0) {
+          selectedCharge = hitCharge;
+          pointer.target = "charge";
+          canvas.style.cursor = "grabbing";
+          updateLabels();
+          return;
+        }
+
+        if (overSurfaceHandle(pos.x, pos.y)) {
+          pointer.target = "surface";
+          canvas.style.cursor = "grabbing";
+          return;
+        }
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        const pos = pointerPosition(event);
+
+        if (!pointer.active) {
+          const hitCharge = chargeAt(pos.x, pos.y);
+          canvas.style.cursor = hitCharge >= 0 || overSurfaceHandle(pos.x, pos.y) ? "grab" : "crosshair";
+          return;
+        }
+
+        if (Math.hypot(pos.x - pointer.downX, pos.y - pointer.downY) > 4) {
+          pointer.moved = true;
+        }
+
+        if (pointer.target === "charge" && charges[pointer.chargeIndex]) {
+          const world = toWorld(pos);
+          charges[pointer.chargeIndex].x = world.x;
+          charges[pointer.chargeIndex].y = world.y;
+          potentialDirty = true;
+          draw();
+        } else if (pointer.target === "surface") {
+          surface = toWorld(pos);
+          draw();
+        }
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        const pos = pointerPosition(event);
+        const clickedEmpty = pointer.active && !pointer.moved && pointer.target === "none" && event.button === 0;
+
+        if (pointer.active) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+
+        pointer.active = false;
+        canvas.style.cursor = "crosshair";
+
+        if (clickedEmpty) {
+          addCharge(toWorld(pos));
+        }
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        pointer.active = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const pos = pointerPosition(event);
+        const hitCharge = chargeAt(pos.x, pos.y);
+        const target = hitCharge >= 0 ? hitCharge : selectedCharge;
+        adjustCharge(target, event.deltaY < 0 ? 1 : -1, event.shiftKey);
+      }, { passive: false });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Delete" || event.key === "Backspace") {
+          deleteSelectedCharge();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          adjustCharge(selectedCharge, 1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          adjustCharge(selectedCharge, -1);
+        }
+      });
+
+      toggleModeButton.addEventListener("click", () => {
+        mode = mode === "field" ? "potential" : "field";
+        updateLabels();
+      });
+
+      toggleShapeButton.addEventListener("click", () => {
+        if (shape === "circle") {
+          shape = "ellipse";
+        } else if (shape === "ellipse") {
+          shape = "square";
+        } else {
+          shape = "circle";
+        }
+        updateLabels();
+      });
+
+      resetSurfaceButton.addEventListener("click", () => {
+        surface = { x: 0.85, y: 0.25 };
+        draw();
+      });
+
+      deleteChargeButton.addEventListener("click", deleteSelectedCharge);
+
+      window.addEventListener("resize", resize);
+
+      resize();
+      updateLabels();
+    })();
+  </script>
+</body>
+</html>

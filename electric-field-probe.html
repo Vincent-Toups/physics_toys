@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Electric Field Probe</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05070b;
+      color: #edf2ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #141b2a 0%, #06080d 58%, #020306 100%);
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2;
+      width: min(350px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(7, 10, 18, 0.74);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      user-select: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 108px 1fr 50px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 12px;
+    }
+
+    .row + .row {
+      margin-top: 8px;
+    }
+
+    label {
+      color: #b9c5db;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #69e2ff;
+    }
+
+    output {
+      color: #edf2ff;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2ff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    button.active {
+      background: rgba(105, 226, 255, 0.18);
+      border-color: rgba(105, 226, 255, 0.34);
+    }
+
+    .stats {
+      margin-left: auto;
+      color: #90a0bb;
+      font-size: 12px;
+      line-height: 34px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: #90a0bb;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 520px) {
+      .panel {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+      }
+
+      .row {
+        grid-template-columns: 92px 1fr 42px;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Interactive electric field probe with draggable spring-tethered positive charge"></canvas>
+
+  <div class="panel">
+    <div class="row">
+      <label for="newCharge">New charge</label>
+      <input id="newCharge" type="range" min="-5" max="5" step="0.25" value="1">
+      <output id="newChargeOut">+1.00</output>
+    </div>
+    <div class="row">
+      <label for="fieldStrength">Field scale</label>
+      <input id="fieldStrength" type="range" min="20" max="220" step="1" value="92">
+      <output id="fieldStrengthOut">92</output>
+    </div>
+    <div class="row">
+      <label for="spring">Spring</label>
+      <input id="spring" type="range" min="2" max="70" step="1" value="18">
+      <output id="springOut">18</output>
+    </div>
+    <div class="row">
+      <label for="damping">Damping</label>
+      <input id="damping" type="range" min="0" max="40" step="1" value="13">
+      <output id="dampingOut">0.13</output>
+    </div>
+    <div class="buttons">
+      <button id="toggleField" type="button">Field arrows</button>
+      <button id="resetProbe" type="button">Reset probe</button>
+      <button id="deleteCharge" type="button">Delete charge</button>
+      <button id="clear" type="button">Clear</button>
+      <span class="stats" id="stats">0 charges</span>
+    </div>
+    <div class="hint">Click to add. Drag charges or the probe handle. Wheel or ↑/↓ changes selected charge by 0.25. Shift-click or right-click deletes.</div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+
+      const controls = {
+        newCharge: document.getElementById("newCharge"),
+        fieldStrength: document.getElementById("fieldStrength"),
+        spring: document.getElementById("spring"),
+        damping: document.getElementById("damping"),
+      };
+
+      const outputs = {
+        newCharge: document.getElementById("newChargeOut"),
+        fieldStrength: document.getElementById("fieldStrengthOut"),
+        spring: document.getElementById("springOut"),
+        damping: document.getElementById("dampingOut"),
+      };
+
+      const toggleFieldButton = document.getElementById("toggleField");
+      const resetProbeButton = document.getElementById("resetProbe");
+      const deleteChargeButton = document.getElementById("deleteCharge");
+      const clearButton = document.getElementById("clear");
+      const stats = document.getElementById("stats");
+
+      let width = 0;
+      let height = 0;
+      let scale = 1;
+      let charges = [];
+      let selectedCharge = -1;
+      let hoveredCharge = -1;
+      let showField = false;
+      let pointer = { x: 0, y: 0, downX: 0, downY: 0, active: false, moved: false, target: "none", chargeIndex: -1 };
+      let lastTime = performance.now();
+
+      const probe = {
+        anchorX: 0,
+        anchorY: 0,
+        bobX: 0,
+        bobY: 0,
+        vx: 0,
+        vy: 0,
+      };
+
+      const config = {
+        chargeRadius: 14,
+        probeAnchorRadius: 11,
+        probeBobRadius: 7,
+        minDistance2: 144,
+        fieldCellSize: 30,
+        forceScale: 7800,
+        maxProbeOffset: 220,
+      };
+
+      function formatCharge(q) {
+        if (Math.abs(q) < 0.005) return "0.00";
+        return `${q > 0 ? "+" : ""}${q.toFixed(2)}`;
+      }
+
+      function resize() {
+        scale = Math.max(1, window.devicePixelRatio || 1);
+        width = Math.floor(window.innerWidth);
+        height = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(width * scale);
+        canvas.height = Math.floor(height * scale);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+        if (!probe.anchorX && !probe.anchorY) {
+          resetProbe();
+        } else {
+          probe.anchorX = Math.max(24, Math.min(width - 24, probe.anchorX));
+          probe.anchorY = Math.max(24, Math.min(height - 24, probe.anchorY));
+          probe.bobX = Math.max(24, Math.min(width - 24, probe.bobX));
+          probe.bobY = Math.max(24, Math.min(height - 24, probe.bobY));
+        }
+      }
+
+      function resetProbe() {
+        probe.anchorX = width * 0.55;
+        probe.anchorY = height * 0.5;
+        probe.bobX = probe.anchorX;
+        probe.bobY = probe.anchorY;
+        probe.vx = 0;
+        probe.vy = 0;
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function chargeAt(x, y, radius = 20) {
+        let best = -1;
+        let bestDistance2 = radius * radius;
+
+        for (let i = charges.length - 1; i >= 0; i -= 1) {
+          const charge = charges[i];
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const distance2 = dx * dx + dy * dy;
+
+          if (distance2 <= bestDistance2) {
+            best = i;
+            bestDistance2 = distance2;
+          }
+        }
+
+        return best;
+      }
+
+      function overProbeAnchor(x, y) {
+        return Math.hypot(x - probe.anchorX, y - probe.anchorY) <= 18;
+      }
+
+      function fieldAt(x, y) {
+        let ex = 0;
+        let ey = 0;
+        const strength = Number(controls.fieldStrength.value);
+
+        for (const charge of charges) {
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r2 = Math.max(dx * dx + dy * dy, config.minDistance2);
+          const invR = 1 / Math.sqrt(r2);
+          const amount = charge.q * strength * config.forceScale / r2;
+          ex += amount * dx * invR;
+          ey += amount * dy * invR;
+        }
+
+        return { x: ex, y: ey };
+      }
+
+      function updateProbe(dt) {
+        const field = fieldAt(probe.bobX, probe.bobY);
+        const spring = Number(controls.spring.value);
+        const damping = Number(controls.damping.value) / 100;
+        const ax = field.x + (probe.anchorX - probe.bobX) * spring - probe.vx * damping * 52;
+        const ay = field.y + (probe.anchorY - probe.bobY) * spring - probe.vy * damping * 52;
+
+        probe.vx += ax * dt;
+        probe.vy += ay * dt;
+        probe.bobX += probe.vx * dt;
+        probe.bobY += probe.vy * dt;
+
+        const dx = probe.bobX - probe.anchorX;
+        const dy = probe.bobY - probe.anchorY;
+        const offset = Math.hypot(dx, dy);
+
+        if (offset > config.maxProbeOffset) {
+          const limit = config.maxProbeOffset / offset;
+          probe.bobX = probe.anchorX + dx * limit;
+          probe.bobY = probe.anchorY + dy * limit;
+          probe.vx *= 0.45;
+          probe.vy *= 0.45;
+        }
+
+        if (probe.bobX < 8 || probe.bobX > width - 8) {
+          probe.bobX = Math.max(8, Math.min(width - 8, probe.bobX));
+          probe.vx *= -0.25;
+        }
+
+        if (probe.bobY < 8 || probe.bobY > height - 8) {
+          probe.bobY = Math.max(8, Math.min(height - 8, probe.bobY));
+          probe.vy *= -0.25;
+        }
+      }
+
+      function drawArrow(x, y, vx, vy, length, color, widthScale = 1) {
+        const magnitude = Math.hypot(vx, vy);
+        if (magnitude < 0.0001) return;
+
+        const ux = vx / magnitude;
+        const uy = vy / magnitude;
+        const head = Math.min(12, Math.max(5, length * 0.32));
+        const endX = x + ux * length;
+        const endY = y + uy * length;
+        const sideX = -uy;
+        const sideY = ux;
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = widthScale;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(x - ux * length * 0.42, y - uy * length * 0.42);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - ux * head + sideX * head * 0.55, endY - uy * head + sideY * head * 0.55);
+        ctx.lineTo(endX - ux * head - sideX * head * 0.55, endY - uy * head - sideY * head * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawField() {
+        if (!showField) return;
+
+        const cell = config.fieldCellSize;
+        const columns = Math.ceil(width / cell);
+        const rows = Math.ceil(height / cell);
+
+        for (let row = 0; row < rows; row += 1) {
+          const y = (row + 0.5) * cell;
+
+          for (let column = 0; column < columns; column += 1) {
+            const x = (column + 0.5) * cell;
+            const field = fieldAt(x, y);
+            const magnitude = Math.hypot(field.x, field.y);
+            if (magnitude < 0.02) continue;
+
+            const strength = Math.min(1, Math.log(1 + magnitude * 0.09) / 3.8);
+            const brightness = Math.pow(strength, 0.72);
+            const length = 5 + 15 * Math.pow(strength, 0.55);
+            const alpha = 0.16 + brightness * 0.58;
+            const red = Math.round(38 + brightness * 210);
+            const green = Math.round(88 + brightness * 150);
+            const blue = Math.round(130 + brightness * 120);
+            drawArrow(x, y, field.x, field.y, length, `rgba(${red}, ${green}, ${blue}, ${alpha})`, 0.7 + brightness * 0.9);
+          }
+        }
+      }
+
+      function drawCharge(charge, index) {
+        const positive = charge.q >= 0;
+        const magnitude = Math.min(1, Math.abs(charge.q) / 5);
+        const radius = config.chargeRadius + magnitude * 8;
+        const selected = index === selectedCharge;
+
+        ctx.save();
+        ctx.shadowColor = positive ? "rgba(255, 86, 117, 0.55)" : "rgba(78, 169, 255, 0.55)";
+        ctx.shadowBlur = 12 + magnitude * 12;
+        const gradient = ctx.createRadialGradient(charge.x - radius * 0.3, charge.y - radius * 0.35, 2, charge.x, charge.y, radius);
+        if (positive) {
+          gradient.addColorStop(0, "#ffd7df");
+          gradient.addColorStop(0.45, "#ff5a78");
+          gradient.addColorStop(1, "#7d1730");
+        } else {
+          gradient.addColorStop(0, "#d6efff");
+          gradient.addColorStop(0.45, "#4ea9ff");
+          gradient.addColorStop(1, "#12356c");
+        }
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(charge.x, charge.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = selected ? 2.5 : 1;
+        ctx.strokeStyle = selected ? "rgba(255, 255, 255, 0.92)" : "rgba(255, 255, 255, 0.28)";
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "700 18px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(positive ? "+" : "-", charge.x, charge.y - 1);
+        ctx.font = "11px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = "rgba(237, 242, 255, 0.86)";
+        ctx.fillText(formatCharge(charge.q), charge.x, charge.y + radius + 13);
+        ctx.restore();
+      }
+
+      function drawProbe() {
+        const dx = probe.bobX - probe.anchorX;
+        const dy = probe.bobY - probe.anchorY;
+        const offset = Math.hypot(dx, dy);
+        const field = fieldAt(probe.anchorX, probe.anchorY);
+        const fieldMagnitude = Math.hypot(field.x, field.y);
+
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.38)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(probe.anchorX, probe.anchorY);
+        const coils = Math.max(5, Math.ceil(offset / 14));
+        const ux = offset > 0.001 ? dx / offset : 1;
+        const uy = offset > 0.001 ? dy / offset : 0;
+        const nx = -uy;
+        const ny = ux;
+        for (let i = 1; i <= coils; i += 1) {
+          const t = i / coils;
+          const wiggle = (i % 2 === 0 ? -1 : 1) * 5;
+          ctx.lineTo(probe.anchorX + dx * t + nx * wiggle, probe.anchorY + dy * t + ny * wiggle);
+        }
+        ctx.lineTo(probe.bobX, probe.bobY);
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.13)";
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(probe.anchorX, probe.anchorY, config.probeAnchorRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#fff4b4";
+        ctx.shadowColor = "rgba(255, 244, 180, 0.65)";
+        ctx.shadowBlur = 16;
+        ctx.beginPath();
+        ctx.arc(probe.bobX, probe.bobY, config.probeBobRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.82)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`F ${fieldMagnitude.toFixed(1)}`, probe.anchorX + 16, probe.anchorY - 16);
+        ctx.restore();
+      }
+
+      function draw() {
+        ctx.fillStyle = "#05070b";
+        ctx.fillRect(0, 0, width, height);
+
+        const gradient = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.75);
+        gradient.addColorStop(0, "#141b2a");
+        gradient.addColorStop(0.58, "#06080d");
+        gradient.addColorStop(1, "#020306");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        drawField();
+
+        for (let i = 0; i < charges.length; i += 1) {
+          drawCharge(charges[i], i);
+        }
+
+        drawProbe();
+      }
+
+      function updateLabels() {
+        outputs.newCharge.textContent = formatCharge(Number(controls.newCharge.value));
+        outputs.fieldStrength.textContent = controls.fieldStrength.value;
+        outputs.spring.textContent = controls.spring.value;
+        outputs.damping.textContent = (Number(controls.damping.value) / 100).toFixed(2);
+        stats.textContent = `${charges.length} charge${charges.length === 1 ? "" : "s"}`;
+        toggleFieldButton.classList.toggle("active", showField);
+        deleteChargeButton.disabled = selectedCharge < 0;
+      }
+
+      function addCharge(x, y) {
+        charges.push({ x, y, q: Number(controls.newCharge.value) });
+        selectedCharge = charges.length - 1;
+        updateLabels();
+      }
+
+      function deleteSelectedCharge() {
+        if (selectedCharge < 0) return;
+        charges.splice(selectedCharge, 1);
+        selectedCharge = Math.min(selectedCharge, charges.length - 1);
+        updateLabels();
+      }
+
+      function adjustCharge(index, delta) {
+        if (index < 0 || !charges[index]) return;
+        const charge = charges[index];
+        const step = 0.25;
+        charge.q = Math.max(-8, Math.min(8, charge.q + delta * step));
+        if (Math.abs(charge.q) < 0.001) charge.q = 0;
+        selectedCharge = index;
+        updateLabels();
+      }
+
+      function animate(time) {
+        const dt = Math.min(0.033, Math.max(0.001, (time - lastTime) / 1000));
+        lastTime = time;
+        updateProbe(dt);
+        draw();
+        requestAnimationFrame(animate);
+      }
+
+      for (const control of Object.values(controls)) {
+        control.addEventListener("input", updateLabels);
+      }
+
+      canvas.addEventListener("pointermove", (event) => {
+        const pos = pointerPosition(event);
+        pointer.x = pos.x;
+        pointer.y = pos.y;
+        hoveredCharge = chargeAt(pos.x, pos.y);
+
+        if (!pointer.active) {
+          canvas.style.cursor = overProbeAnchor(pos.x, pos.y) ? "grab" : hoveredCharge >= 0 ? "pointer" : "crosshair";
+          return;
+        }
+
+        if (Math.hypot(pos.x - pointer.downX, pos.y - pointer.downY) > 4) {
+          pointer.moved = true;
+        }
+
+        if (pointer.target === "probe") {
+          probe.anchorX = Math.max(12, Math.min(width - 12, pos.x));
+          probe.anchorY = Math.max(12, Math.min(height - 12, pos.y));
+          canvas.style.cursor = "grabbing";
+        } else if (pointer.target === "charge" && charges[pointer.chargeIndex]) {
+          charges[pointer.chargeIndex].x = Math.max(0, Math.min(width, pos.x));
+          charges[pointer.chargeIndex].y = Math.max(0, Math.min(height, pos.y));
+          canvas.style.cursor = "grabbing";
+        }
+      });
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const pos = pointerPosition(event);
+        pointer = { x: pos.x, y: pos.y, downX: pos.x, downY: pos.y, active: true, moved: false, target: "none", chargeIndex: -1 };
+        canvas.setPointerCapture(event.pointerId);
+
+        const index = chargeAt(pos.x, pos.y);
+        if ((event.shiftKey || event.button === 2) && index >= 0) {
+          selectedCharge = index;
+          deleteSelectedCharge();
+          pointer.target = "deleted";
+          return;
+        }
+
+        if (overProbeAnchor(pos.x, pos.y)) {
+          pointer.target = "probe";
+          canvas.style.cursor = "grabbing";
+          return;
+        }
+
+        if (index >= 0) {
+          selectedCharge = index;
+          pointer.target = "charge";
+          pointer.chargeIndex = index;
+          canvas.style.cursor = "grabbing";
+          updateLabels();
+        }
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        const pos = pointerPosition(event);
+        const clickedEmpty = pointer.active && !pointer.moved && pointer.target === "none";
+        pointer.active = false;
+        canvas.releasePointerCapture(event.pointerId);
+        canvas.style.cursor = overProbeAnchor(pos.x, pos.y) ? "grab" : chargeAt(pos.x, pos.y) >= 0 ? "pointer" : "crosshair";
+
+        if (clickedEmpty && event.button === 0) {
+          addCharge(pos.x, pos.y);
+        }
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        pointer.active = false;
+      });
+
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const pos = pointerPosition(event);
+        const index = chargeAt(pos.x, pos.y, 26);
+        const target = index >= 0 ? index : selectedCharge;
+        adjustCharge(target, event.deltaY < 0 ? 1 : -1);
+      }, { passive: false });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Delete" || event.key === "Backspace") {
+          deleteSelectedCharge();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          adjustCharge(selectedCharge, 1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          adjustCharge(selectedCharge, -1);
+        }
+      });
+
+      toggleFieldButton.addEventListener("click", () => {
+        showField = !showField;
+        updateLabels();
+      });
+
+      resetProbeButton.addEventListener("click", resetProbe);
+      deleteChargeButton.addEventListener("click", deleteSelectedCharge);
+      clearButton.addEventListener("click", () => {
+        charges = [];
+        selectedCharge = -1;
+        updateLabels();
+      });
+
+      window.addEventListener("resize", resize);
+
+      resize();
+      updateLabels();
+      requestAnimationFrame(animate);
+    })();
+  </script>
+</body>
+</html>

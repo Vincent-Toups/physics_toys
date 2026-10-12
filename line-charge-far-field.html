@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Line Charge Far Field</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05070b;
+      color: #edf2ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #141b2a 0%, #06080d 58%, #020306 100%);
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2;
+      width: min(370px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(7, 10, 18, 0.74);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      user-select: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 108px 1fr 54px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 12px;
+    }
+
+    .row + .row {
+      margin-top: 8px;
+    }
+
+    label {
+      color: #b9c5db;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #69e2ff;
+    }
+
+    output {
+      color: #edf2ff;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2ff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    button.active {
+      background: rgba(105, 226, 255, 0.18);
+      border-color: rgba(105, 226, 255, 0.34);
+    }
+
+    .readout {
+      flex: 1 1 100%;
+      color: #90a0bb;
+      font-size: 12px;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: #90a0bb;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 520px) {
+      .panel {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+      }
+
+      .row {
+        grid-template-columns: 92px 1fr 46px;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Finite line charge and equivalent point charge far field comparison"></canvas>
+
+  <div class="panel">
+    <div class="row">
+      <label for="length">Line length</label>
+      <input id="length" type="range" min="0.5" max="3" step="0.05" value="1.4">
+      <output id="lengthOut">1.40</output>
+    </div>
+    <div class="row">
+      <label for="charge">Total Q</label>
+      <input id="charge" type="range" min="-3" max="3" step="0.1" value="1">
+      <output id="chargeOut">+1.0</output>
+    </div>
+    <div class="row">
+      <label for="scale">Field scale</label>
+      <input id="scale" type="range" min="12" max="180" step="1" value="70">
+      <output id="scaleOut">70</output>
+    </div>
+    <div class="row">
+      <label for="spacing">Arrows</label>
+      <input id="spacing" type="range" min="22" max="72" step="2" value="34">
+      <output id="spacingOut">34</output>
+    </div>
+    <div class="buttons">
+      <button id="toggleMode" class="active" type="button">Field</button>
+      <button id="toggleSource" class="active" type="button">Line</button>
+      <button id="toggleCompare" class="active" type="button">Point compare</button>
+      <button id="resetProbe" type="button">Reset probe</button>
+      <div class="readout" id="readout">r/L = 0.00, difference = 0.0%</div>
+    </div>
+    <div class="hint">Drag the yellow probe outward. When its distance is large compared with the line length, the line field approaches the same field as a point charge with the same total charge.</div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const potentialCanvas = document.createElement("canvas");
+      const potentialCtx = potentialCanvas.getContext("2d", { alpha: false });
+
+      const controls = {
+        length: document.getElementById("length"),
+        charge: document.getElementById("charge"),
+        scale: document.getElementById("scale"),
+        spacing: document.getElementById("spacing"),
+      };
+
+      const outputs = {
+        length: document.getElementById("lengthOut"),
+        charge: document.getElementById("chargeOut"),
+        scale: document.getElementById("scaleOut"),
+        spacing: document.getElementById("spacingOut"),
+      };
+
+      const toggleModeButton = document.getElementById("toggleMode");
+      const toggleSourceButton = document.getElementById("toggleSource");
+      const toggleCompareButton = document.getElementById("toggleCompare");
+      const resetProbeButton = document.getElementById("resetProbe");
+      const readout = document.getElementById("readout");
+
+      let width = 0;
+      let height = 0;
+      let pixelScale = 1;
+      let unitScale = 1;
+      let originX = 0;
+      let originY = 0;
+      let mode = "field";
+      let sourceMode = "line";
+      let showCompare = true;
+      let draggingProbe = false;
+      let probe = { x: 2.8, y: 0.75 };
+      let potentialDirty = true;
+
+      const config = {
+        lineSamples: 180,
+        potentialCellSize: 4,
+        softening: 0.003,
+      };
+
+      function formatSigned(value, digits = 1) {
+        if (Math.abs(value) < 0.0005) return Number(0).toFixed(digits);
+        return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+      }
+
+      function resize() {
+        pixelScale = Math.max(1, window.devicePixelRatio || 1);
+        width = Math.floor(window.innerWidth);
+        height = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(width * pixelScale);
+        canvas.height = Math.floor(height * pixelScale);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+        unitScale = Math.min(width, height) * 0.18;
+        originX = width * 0.52;
+        originY = height * 0.53;
+        potentialCanvas.width = Math.max(1, Math.ceil(width / config.potentialCellSize));
+        potentialCanvas.height = Math.max(1, Math.ceil(height / config.potentialCellSize));
+        potentialDirty = true;
+        draw();
+      }
+
+      function toScreen(point) {
+        return {
+          x: originX + point.x * unitScale,
+          y: originY - point.y * unitScale,
+        };
+      }
+
+      function toWorld(point) {
+        return {
+          x: (point.x - originX) / unitScale,
+          y: (originY - point.y) / unitScale,
+        };
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function pointFieldAt(x, y) {
+        const q = Number(controls.charge.value);
+        const r2 = Math.max(x * x + y * y, config.softening);
+        const invR = 1 / Math.sqrt(r2);
+        return {
+          x: q * x * invR / r2,
+          y: q * y * invR / r2,
+        };
+      }
+
+      function pointPotentialAt(x, y) {
+        const q = Number(controls.charge.value);
+        const r = Math.sqrt(Math.max(x * x + y * y, config.softening));
+        return q / r;
+      }
+
+      function lineFieldAt(x, y) {
+        const q = Number(controls.charge.value);
+        const length = Number(controls.length.value);
+        const dy = length / config.lineSamples;
+        const dq = q / config.lineSamples;
+        let ex = 0;
+        let ey = 0;
+
+        for (let i = 0; i < config.lineSamples; i += 1) {
+          const chargeY = -length * 0.5 + (i + 0.5) * dy;
+          const rx = x;
+          const ry = y - chargeY;
+          const r2 = Math.max(rx * rx + ry * ry, config.softening);
+          const invR = 1 / Math.sqrt(r2);
+          ex += dq * rx * invR / r2;
+          ey += dq * ry * invR / r2;
+        }
+
+        return { x: ex, y: ey };
+      }
+
+      function linePotentialAt(x, y) {
+        const q = Number(controls.charge.value);
+        const length = Number(controls.length.value);
+        const dy = length / config.lineSamples;
+        const dq = q / config.lineSamples;
+        let potential = 0;
+
+        for (let i = 0; i < config.lineSamples; i += 1) {
+          const chargeY = -length * 0.5 + (i + 0.5) * dy;
+          const rx = x;
+          const ry = y - chargeY;
+          const r = Math.sqrt(Math.max(rx * rx + ry * ry, config.softening));
+          potential += dq / r;
+        }
+
+        return potential;
+      }
+
+      function activeFieldAt(x, y) {
+        return sourceMode === "line" ? lineFieldAt(x, y) : pointFieldAt(x, y);
+      }
+
+      function activePotentialAt(x, y) {
+        return sourceMode === "line" ? linePotentialAt(x, y) : pointPotentialAt(x, y);
+      }
+
+      function drawArrow(x, y, vx, vy, length, color, lineWidth = 1) {
+        const magnitude = Math.hypot(vx, vy);
+        if (magnitude < 0.000001) return;
+
+        const ux = vx / magnitude;
+        const uy = vy / magnitude;
+        const endX = x + ux * length;
+        const endY = y - uy * length;
+        const startX = x - ux * length * 0.35;
+        const startY = y + uy * length * 0.35;
+        const sideX = -uy;
+        const sideY = -ux;
+        const head = Math.max(5, Math.min(12, length * 0.32));
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - ux * head + sideX * head * 0.55, endY + uy * head + sideY * head * 0.55);
+        ctx.lineTo(endX - ux * head - sideX * head * 0.55, endY + uy * head - sideY * head * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = "#05070b";
+        ctx.fillRect(0, 0, width, height);
+
+        const gradient = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.75);
+        gradient.addColorStop(0, "#141b2a");
+        gradient.addColorStop(0.58, "#06080d");
+        gradient.addColorStop(1, "#020306");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      function drawGrid() {
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.08)";
+        ctx.lineWidth = 1;
+
+        for (let x = originX % unitScale; x < width; x += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+
+        for (let y = originY % unitScale; y < height; y += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.26)";
+        ctx.beginPath();
+        ctx.moveTo(0, originY);
+        ctx.lineTo(width, originY);
+        ctx.moveTo(originX, 0);
+        ctx.lineTo(originX, height);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawField() {
+        const spacing = Number(controls.spacing.value);
+        const fieldScale = Number(controls.scale.value);
+
+        for (let sy = spacing * 0.5; sy < height; sy += spacing) {
+          for (let sx = spacing * 0.5; sx < width; sx += spacing) {
+            const world = toWorld({ x: sx, y: sy });
+            const field = activeFieldAt(world.x, world.y);
+            const magnitude = Math.hypot(field.x, field.y);
+            if (magnitude < 0.0005) continue;
+
+            const strength = Math.min(1, Math.log(1 + magnitude * fieldScale * 0.32) / 4.2);
+            const length = 4 + 16 * Math.pow(strength, 0.55);
+            const brightness = Math.pow(strength, 0.72);
+            const alpha = 0.18 + brightness * 0.62;
+            const red = Math.round(36 + brightness * 210);
+            const green = Math.round(92 + brightness * 145);
+            const blue = Math.round(132 + brightness * 118);
+
+            drawArrow(sx, sy, field.x, field.y, length, `rgba(${red}, ${green}, ${blue}, ${alpha})`, 0.7 + brightness * 0.9);
+          }
+        }
+      }
+
+      function renderPotentialMap() {
+        const mapWidth = potentialCanvas.width;
+        const mapHeight = potentialCanvas.height;
+        const image = potentialCtx.createImageData(mapWidth, mapHeight);
+        const data = image.data;
+        const values = new Float32Array(mapWidth * mapHeight);
+        let minValue = Infinity;
+        let maxValue = -Infinity;
+
+        for (let py = 0; py < mapHeight; py += 1) {
+          for (let px = 0; px < mapWidth; px += 1) {
+            const screenX = (px + 0.5) * config.potentialCellSize;
+            const screenY = (py + 0.5) * config.potentialCellSize;
+            const world = toWorld({ x: screenX, y: screenY });
+            const potential = activePotentialAt(world.x, world.y);
+            const compressed = Math.sign(potential) * Math.log1p(Math.abs(potential));
+            const index = py * mapWidth + px;
+            values[index] = compressed;
+            minValue = Math.min(minValue, compressed);
+            maxValue = Math.max(maxValue, compressed);
+          }
+        }
+
+        const range = Math.max(0.0001, maxValue - minValue);
+
+        for (let i = 0; i < values.length; i += 1) {
+          const normalized = (values[i] - minValue) / range;
+          const gray = Math.round(18 + normalized * 226);
+          const offset = i * 4;
+          data[offset] = gray;
+          data[offset + 1] = gray;
+          data[offset + 2] = gray;
+          data[offset + 3] = 255;
+        }
+
+        potentialCtx.putImageData(image, 0, 0);
+        potentialDirty = false;
+      }
+
+      function drawPotential() {
+        if (potentialDirty) {
+          renderPotentialMap();
+        }
+
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(potentialCanvas, 0, 0, width, height);
+        ctx.restore();
+      }
+
+      function drawSources() {
+        const q = Number(controls.charge.value);
+        const length = Number(controls.length.value);
+        const positive = q >= 0;
+        const color = positive ? "#ff5a78" : "#4ea9ff";
+        const glow = positive ? "rgba(255, 86, 117, 0.55)" : "rgba(78, 169, 255, 0.55)";
+        const top = toScreen({ x: 0, y: length * 0.5 });
+        const bottom = toScreen({ x: 0, y: -length * 0.5 });
+
+        ctx.save();
+        ctx.shadowColor = glow;
+        ctx.shadowBlur = 18;
+
+        if (sourceMode === "line") {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 10;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(top.x, top.y);
+          ctx.lineTo(bottom.x, bottom.y);
+          ctx.stroke();
+
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.62)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(top.x, top.y);
+          ctx.lineTo(bottom.x, bottom.y);
+          ctx.stroke();
+        } else {
+          ctx.setLineDash([5, 7]);
+          ctx.strokeStyle = "rgba(237, 242, 255, 0.26)";
+          ctx.lineWidth = 1.25;
+          ctx.beginPath();
+          ctx.moveTo(top.x, top.y);
+          ctx.lineTo(bottom.x, bottom.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(originX, originY, 15, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.78)";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "700 20px Inter, ui-sans-serif, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(positive ? "+" : "-", originX, originY - 1);
+        }
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(237, 242, 255, 0.82)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`L = ${length.toFixed(2)}`, originX + 34, originY);
+        ctx.restore();
+      }
+
+      function drawComparison() {
+        if (!showCompare) return;
+
+        const probeScreen = toScreen(probe);
+        const point = pointFieldAt(probe.x, probe.y);
+        const line = lineFieldAt(probe.x, probe.y);
+        const fieldScale = Number(controls.scale.value);
+        const pointMagnitude = Math.hypot(point.x, point.y);
+        const lineMagnitude = Math.hypot(line.x, line.y);
+        const pointLength = Math.min(82, 12 + Math.log(1 + pointMagnitude * fieldScale * 0.55) * 18);
+        const lineLength = Math.min(82, 12 + Math.log(1 + lineMagnitude * fieldScale * 0.55) * 18);
+
+        drawArrow(probeScreen.x, probeScreen.y, point.x, point.y, pointLength, "rgba(255, 255, 255, 0.45)", 3.2);
+        drawArrow(probeScreen.x, probeScreen.y, line.x, line.y, lineLength, "rgba(255, 244, 180, 0.94)", 2.1);
+      }
+
+      function drawProbe() {
+        const screen = toScreen(probe);
+        const line = lineFieldAt(probe.x, probe.y);
+        const point = pointFieldAt(probe.x, probe.y);
+        const activePotential = activePotentialAt(probe.x, probe.y);
+        const active = sourceMode === "line" ? line : point;
+        const activeMagnitude = Math.hypot(active.x, active.y);
+        const pointMagnitude = Math.hypot(point.x, point.y);
+        const diff = pointMagnitude > 0.000001
+          ? Math.hypot(line.x - point.x, line.y - point.y) / pointMagnitude * 100
+          : 0;
+        const distance = Math.hypot(probe.x, probe.y);
+        const length = Number(controls.length.value);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 244, 180, 0.26)";
+        ctx.setLineDash([4, 6]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(originX, originY);
+        ctx.lineTo(screen.x, screen.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        drawComparison();
+
+        ctx.shadowColor = "rgba(255, 244, 180, 0.7)";
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = "#fff4b4";
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.86)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        const baseReadout = `r/L = ${(distance / length).toFixed(2)}, ${sourceMode} |E| = ${activeMagnitude.toFixed(3)}, difference = ${diff.toFixed(1)}%`;
+        readout.textContent = mode === "field" ? baseReadout : `V = ${activePotential.toFixed(3)}, ${baseReadout}`;
+      }
+
+      function draw() {
+        drawBackground();
+        if (mode === "potential") {
+          drawPotential();
+        }
+        drawGrid();
+        if (mode === "field") {
+          drawField();
+        }
+        drawSources();
+        drawProbe();
+      }
+
+      function updateLabels() {
+        outputs.length.textContent = Number(controls.length.value).toFixed(2);
+        outputs.charge.textContent = formatSigned(Number(controls.charge.value), 1);
+        outputs.scale.textContent = controls.scale.value;
+        outputs.spacing.textContent = controls.spacing.value;
+        potentialDirty = true;
+        toggleModeButton.textContent = mode === "field" ? "Field" : "Potential";
+        toggleModeButton.classList.toggle("active", mode === "field");
+        toggleSourceButton.textContent = sourceMode === "line" ? "Line" : "Point";
+        toggleSourceButton.classList.toggle("active", sourceMode === "line");
+        toggleCompareButton.classList.toggle("active", showCompare);
+        draw();
+      }
+
+      for (const control of Object.values(controls)) {
+        control.addEventListener("input", updateLabels);
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const pos = pointerPosition(event);
+        const probeScreen = toScreen(probe);
+        draggingProbe = Math.hypot(pos.x - probeScreen.x, pos.y - probeScreen.y) < 24;
+
+        if (draggingProbe) {
+          canvas.setPointerCapture(event.pointerId);
+          canvas.style.cursor = "grabbing";
+        }
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        const pos = pointerPosition(event);
+        const probeScreen = toScreen(probe);
+
+        if (draggingProbe) {
+          probe = toWorld(pos);
+          draw();
+          return;
+        }
+
+        canvas.style.cursor = Math.hypot(pos.x - probeScreen.x, pos.y - probeScreen.y) < 24 ? "grab" : "crosshair";
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        if (draggingProbe) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+        draggingProbe = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        draggingProbe = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      toggleModeButton.addEventListener("click", () => {
+        mode = mode === "field" ? "potential" : "field";
+        updateLabels();
+      });
+
+      toggleSourceButton.addEventListener("click", () => {
+        sourceMode = sourceMode === "line" ? "point" : "line";
+        updateLabels();
+      });
+
+      toggleCompareButton.addEventListener("click", () => {
+        showCompare = !showCompare;
+        updateLabels();
+      });
+
+      resetProbeButton.addEventListener("click", () => {
+        probe = { x: 2.8, y: 0.75 };
+        draw();
+      });
+
+      window.addEventListener("resize", resize);
+
+      resize();
+      updateLabels();
+    })();
+  </script>
+</body>
+</html>

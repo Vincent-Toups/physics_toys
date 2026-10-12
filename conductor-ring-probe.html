@@ -1,0 +1,1616 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conducting Ring Probe</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05070b;
+      color: #edf2ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #141b2a 0%, #06080d 58%, #020306 100%);
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2;
+      width: min(380px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(7, 10, 18, 0.74);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      user-select: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 112px 1fr 54px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 12px;
+    }
+
+    .row + .row {
+      margin-top: 8px;
+    }
+
+    label {
+      color: #b9c5db;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #69e2ff;
+    }
+
+    output {
+      color: #edf2ff;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2ff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    button.active {
+      background: rgba(105, 226, 255, 0.18);
+      border-color: rgba(105, 226, 255, 0.34);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .stats {
+      flex: 1 1 100%;
+      color: #90a0bb;
+      font-size: 12px;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: #90a0bb;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 520px) {
+      .panel {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+      }
+
+      .row {
+        grid-template-columns: 94px 1fr 46px;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Electric field probe with a conducting ring made from fixed positive and mobile negative charges"></canvas>
+
+  <div class="panel">
+    <div class="row">
+      <label for="newCharge">New charge</label>
+      <input id="newCharge" type="range" min="-5" max="5" step="0.25" value="1">
+      <output id="newChargeOut">+1.00</output>
+    </div>
+    <div class="row">
+      <label for="fieldScale">Field scale</label>
+      <input id="fieldScale" type="range" min="10" max="180" step="1" value="74">
+      <output id="fieldScaleOut">74</output>
+    </div>
+    <div class="row">
+      <label for="simSpeed">Sim speed</label>
+      <input id="simSpeed" type="range" min="0" max="120" step="1" value="54">
+      <output id="simSpeedOut">0.54</output>
+    </div>
+    <div class="row">
+      <label for="spring">Probe spring</label>
+      <input id="spring" type="range" min="2" max="70" step="1" value="16">
+      <output id="springOut">16</output>
+    </div>
+    <div class="buttons">
+      <button id="toggleMode" class="active" type="button">Field</button>
+      <button id="pause" type="button">Pause</button>
+      <button id="resetConductor" type="button">Reset conductor</button>
+      <button id="resetProbe" type="button">Reset probe</button>
+      <button id="deleteCharge" type="button">Delete charge</button>
+      <button id="clearExternal" type="button">Clear external</button>
+      <div class="stats" id="stats">ring: inner R = 3, outer R = 9</div>
+    </div>
+    <div class="hint">Click outside the conducting material to add external charge. Drag external charges or the probe handle. Wheel or ↑/↓ changes selected external charge by 0.25.</div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const potentialCanvas = document.createElement("canvas");
+      const potentialCtx = potentialCanvas.getContext("2d", { alpha: false });
+
+      const controls = {
+        newCharge: document.getElementById("newCharge"),
+        fieldScale: document.getElementById("fieldScale"),
+        simSpeed: document.getElementById("simSpeed"),
+        spring: document.getElementById("spring"),
+      };
+
+      const outputs = {
+        newCharge: document.getElementById("newChargeOut"),
+        fieldScale: document.getElementById("fieldScaleOut"),
+        simSpeed: document.getElementById("simSpeedOut"),
+        spring: document.getElementById("springOut"),
+      };
+
+      const toggleModeButton = document.getElementById("toggleMode");
+      const pauseButton = document.getElementById("pause");
+      const resetConductorButton = document.getElementById("resetConductor");
+      const resetProbeButton = document.getElementById("resetProbe");
+      const deleteChargeButton = document.getElementById("deleteCharge");
+      const clearExternalButton = document.getElementById("clearExternal");
+      const stats = document.getElementById("stats");
+
+      let width = 0;
+      let height = 0;
+      let pixelScale = 1;
+      let unitScale = 1;
+      let originX = 0;
+      let originY = 0;
+      let mode = "field";
+      let paused = false;
+      let adaptiveDamping = 0.85;
+      let lastTime = performance.now();
+      let potentialDirty = true;
+      let fixedCharges = [];
+      let electrons = [];
+      let externalCharges = [];
+      let selectedExternal = -1;
+      let gpuIntegrator = null;
+      let gpuFieldAverager = null;
+      let smoothedFieldGrid = null;
+      let pointer = { active: false, moved: false, target: "none", chargeIndex: -1, downX: 0, downY: 0 };
+
+      const probe = {
+        anchorX: 6.3,
+        anchorY: 1.2,
+        bobX: 6.3,
+        bobY: 1.2,
+        vx: 0,
+        vy: 0,
+      };
+
+      const config = {
+        innerRadius: 3,
+        outerRadius: 9,
+        softening: 0.05,
+        electronCount: 2160,
+        positiveCount: 2160,
+        ringChargeMagnitude: 2,
+        externalChargeScale: 1000,
+        fieldCellSize: 46,
+        potentialCellSize: 12,
+        fieldAverageRadius: 1.25,
+        fieldTemporalAlpha: 0.08,
+        forceConstant: 0.55,
+        electronWall: 260,
+        collisionRadius: 0.6,
+        collisionStrength: 18,
+        maxElectronSpeed: 7,
+        maxExternalCharges: 32,
+        dampingKineticEnergyMin: 0.8,
+        dampingKineticEnergyMax: 1.5,
+      };
+
+      function formatCharge(q) {
+        if (Math.abs(q) < 0.005) return "0.00";
+        return `${q > 0 ? "+" : ""}${q.toFixed(2)}`;
+      }
+
+      function resize() {
+        pixelScale = Math.max(1, window.devicePixelRatio || 1);
+        width = Math.floor(window.innerWidth);
+        height = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(width * pixelScale);
+        canvas.height = Math.floor(height * pixelScale);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+        unitScale = Math.min(width, height) / 20.5;
+        originX = width * 0.53;
+        originY = height * 0.53;
+        potentialCanvas.width = Math.max(1, Math.ceil(width / config.potentialCellSize));
+        potentialCanvas.height = Math.max(1, Math.ceil(height / config.potentialCellSize));
+        potentialDirty = true;
+      }
+
+      function toScreen(point) {
+        return {
+          x: originX + point.x * unitScale,
+          y: originY - point.y * unitScale,
+        };
+      }
+
+      function toWorld(point) {
+        return {
+          x: (point.x - originX) / unitScale,
+          y: (originY - point.y) / unitScale,
+        };
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function inConductorMaterial(point) {
+        const r = Math.hypot(point.x, point.y);
+        return r > config.innerRadius && r < config.outerRadius;
+      }
+
+      function projectToConductor(point) {
+        const r = Math.hypot(point.x, point.y) || 1;
+        const clamped = Math.max(config.innerRadius + 0.06, Math.min(config.outerRadius - 0.06, r));
+        return {
+          x: point.x / r * clamped,
+          y: point.y / r * clamped,
+        };
+      }
+
+      function makeAnnulusPoint(index, count, jitter = 0) {
+        const golden = Math.PI * (3 - Math.sqrt(5));
+        const u = (index + 0.5) / count;
+        const radius = Math.sqrt(config.innerRadius * config.innerRadius + u * (config.outerRadius * config.outerRadius - config.innerRadius * config.innerRadius));
+        const theta = index * golden + jitter;
+        return {
+          x: Math.cos(theta) * radius,
+          y: Math.sin(theta) * radius,
+        };
+      }
+
+      function resetConductor() {
+        fixedCharges = [];
+        electrons = [];
+
+        for (let i = 0; i < config.positiveCount; i += 1) {
+          const p = makeAnnulusPoint(i, config.positiveCount, 0);
+          fixedCharges.push({ x: p.x, y: p.y, vx: 0, vy: 0, q: config.ringChargeMagnitude });
+        }
+
+        for (let i = 0; i < config.electronCount; i += 1) {
+          const p = makeAnnulusPoint(i, config.electronCount, 0.37);
+          electrons.push({ x: p.x, y: p.y, vx: 0, vy: 0, q: -config.ringChargeMagnitude });
+        }
+
+        adaptiveDamping = 0.85;
+        gpuIntegrator = createGpuIntegrator();
+        if (gpuIntegrator) {
+          gpuIntegrator.uploadMobileCharges();
+          gpuIntegrator.uploadFixed();
+          gpuIntegrator.uploadState();
+          gpuIntegrator.uploadExternal();
+        }
+        gpuFieldAverager = createGpuFieldAverager();
+        if (gpuFieldAverager) {
+          gpuFieldAverager.uploadFixed();
+        }
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      function resetProbe() {
+        probe.anchorX = 6.3;
+        probe.anchorY = 1.2;
+        probe.bobX = probe.anchorX;
+        probe.bobY = probe.anchorY;
+        probe.vx = 0;
+        probe.vy = 0;
+      }
+
+      function allSources(state = electrons) {
+        return [...fixedCharges, ...state, ...externalCharges];
+      }
+
+      function mobileCharges() {
+        return electrons;
+      }
+
+      function setMobileCharges(nextMobile) {
+        for (let i = 0; i < electrons.length; i += 1) {
+          Object.assign(electrons[i], nextMobile[i]);
+        }
+      }
+
+      function fieldFromSources(x, y, sources, skipIndex = -1) {
+        let ex = 0;
+        let ey = 0;
+
+        for (let i = 0; i < sources.length; i += 1) {
+          if (i === skipIndex) continue;
+          const charge = sources[i];
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r2 = Math.max(dx * dx + dy * dy, config.softening);
+          ex += charge.q * dx / r2;
+          ey += charge.q * dy / r2;
+        }
+
+        return { x: ex, y: ey };
+      }
+
+      function fieldAt(x, y) {
+        return fieldFromSources(x, y, allSources());
+      }
+
+      function averagedFieldAt(x, y) {
+        const radius = config.fieldAverageRadius;
+        const centerRadius = Math.hypot(x, y);
+        const clipToConductor = centerRadius >= config.innerRadius && centerRadius <= config.outerRadius;
+        const offsets = [
+          [0, 0],
+          [radius * 0.35, 0],
+          [-radius * 0.35, 0],
+          [0, radius * 0.35],
+          [0, -radius * 0.35],
+          [radius * 0.25, radius * 0.25],
+          [-radius * 0.25, radius * 0.25],
+          [radius * 0.25, -radius * 0.25],
+          [-radius * 0.25, -radius * 0.25],
+          [radius * 0.7, 0],
+          [-radius * 0.7, 0],
+          [0, radius * 0.7],
+          [0, -radius * 0.7],
+          [radius * 0.5, radius * 0.5],
+          [-radius * 0.5, radius * 0.5],
+          [radius * 0.5, -radius * 0.5],
+          [-radius * 0.5, -radius * 0.5],
+          [radius, 0],
+          [-radius, 0],
+          [0, radius],
+          [0, -radius],
+          [radius * 0.7, radius * 0.7],
+          [-radius * 0.7, radius * 0.7],
+          [radius * 0.7, -radius * 0.7],
+          [-radius * 0.7, -radius * 0.7],
+        ];
+        let ex = 0;
+        let ey = 0;
+        let count = 0;
+
+        for (const offset of offsets) {
+          const sampleX = x + offset[0];
+          const sampleY = y + offset[1];
+          if (clipToConductor) {
+            const sampleRadius = Math.hypot(sampleX, sampleY);
+            if (sampleRadius < config.innerRadius || sampleRadius > config.outerRadius) continue;
+          }
+          const field = fieldAt(sampleX, sampleY);
+          ex += field.x;
+          ey += field.y;
+          count += 1;
+        }
+
+        return { x: count ? ex / count : 0, y: count ? ey / count : 0 };
+      }
+
+      function potentialAt(x, y) {
+        let potential = 0;
+
+        for (const charge of allSources()) {
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r = Math.sqrt(Math.max(dx * dx + dy * dy, config.softening));
+          potential += charge.q / r;
+        }
+
+        return potential;
+      }
+
+      function createGpuIntegrator() {
+        const computeCanvas = document.createElement("canvas");
+        const gl = computeCanvas.getContext("webgl2", { antialias: false, depth: false, stencil: false });
+        if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
+
+        const count = config.electronCount;
+        computeCanvas.width = count;
+        computeCanvas.height = 1;
+
+        const vertexSource = `#version 300 es
+          precision highp float;
+          void main() {
+            vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);
+            gl_Position = vec4(p, 0.0, 1.0);
+          }
+        `;
+
+        const derivativeSource = `#version 300 es
+          precision highp float;
+          precision highp int;
+          const int MOBILE_COUNT = ${config.electronCount};
+          const int FIXED_COUNT = ${config.positiveCount};
+          const int MAX_EXTERNAL = ${config.maxExternalCharges};
+          uniform sampler2D u_state;
+          uniform sampler2D u_mobile_q;
+          uniform sampler2D u_fixed;
+          uniform sampler2D u_external;
+          uniform int u_external_count;
+          uniform float u_softening;
+          uniform float u_force;
+          uniform float u_inner;
+          uniform float u_outer;
+          uniform float u_wall;
+          uniform float u_collision_radius;
+          uniform float u_collision_strength;
+          out vec4 outValue;
+
+          vec2 fieldFrom(vec2 p, vec2 source, float q) {
+            vec2 r = p - source;
+            float r2 = max(dot(r, r), u_softening);
+            return q * r / r2;
+          }
+
+          void main() {
+            int i = int(gl_FragCoord.x);
+            vec4 state = texelFetch(u_state, ivec2(i, 0), 0);
+            vec2 p = state.xy;
+            vec2 v = state.zw;
+            float selfQ = texelFetch(u_mobile_q, ivec2(i, 0), 0).x;
+            vec2 field = vec2(0.0);
+            vec2 collision = vec2(0.0);
+
+            for (int j = 0; j < FIXED_COUNT; j += 1) {
+              vec4 fixedCharge = texelFetch(u_fixed, ivec2(j, 0), 0);
+              field += fieldFrom(p, fixedCharge.xy, fixedCharge.z);
+            }
+
+            for (int j = 0; j < MOBILE_COUNT; j += 1) {
+              if (j == i) continue;
+              vec4 mobile = texelFetch(u_state, ivec2(j, 0), 0);
+              float q = texelFetch(u_mobile_q, ivec2(j, 0), 0).x;
+              field += fieldFrom(p, mobile.xy, q);
+              vec2 separation = p - mobile.xy;
+              float distance = length(separation);
+              if (distance > 0.0001 && distance < u_collision_radius) {
+                float overlap = u_collision_radius - distance;
+                collision += normalize(separation) * overlap * u_collision_strength;
+              }
+            }
+
+            for (int j = 0; j < MAX_EXTERNAL; j += 1) {
+              if (j >= u_external_count) break;
+              vec4 externalCharge = texelFetch(u_external, ivec2(j, 0), 0);
+              field += fieldFrom(p, externalCharge.xy, externalCharge.z);
+            }
+
+            vec2 a = selfQ * field * u_force + collision;
+            float radius = max(length(p), 0.0001);
+            if (radius < u_inner + 0.08) {
+              a += normalize(p) * ((u_inner + 0.08 - radius) * u_wall);
+            } else if (radius > u_outer - 0.08) {
+              a -= normalize(p) * ((radius - u_outer + 0.08) * u_wall);
+            }
+
+            outValue = vec4(v, a);
+          }
+        `;
+
+        const finalSource = `#version 300 es
+          precision highp float;
+          uniform sampler2D u_state;
+          uniform sampler2D u_k1;
+          uniform sampler2D u_k2;
+          uniform sampler2D u_k3;
+          uniform sampler2D u_k4;
+          uniform float u_dt;
+          uniform float u_drag;
+          uniform float u_inner;
+          uniform float u_outer;
+          uniform float u_max_speed;
+          out vec4 outValue;
+          void main() {
+            ivec2 uv = ivec2(int(gl_FragCoord.x), 0);
+            vec4 state = texelFetch(u_state, uv, 0);
+            vec4 k1 = texelFetch(u_k1, uv, 0);
+            vec4 k2 = texelFetch(u_k2, uv, 0);
+            vec4 k3 = texelFetch(u_k3, uv, 0);
+            vec4 k4 = texelFetch(u_k4, uv, 0);
+            state += u_dt * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0;
+            state.zw *= u_drag;
+            float speed = length(state.zw);
+            if (speed > u_max_speed) state.zw *= u_max_speed / speed;
+            float radius = max(length(state.xy), 0.0001);
+            float clamped = clamp(radius, u_inner + 0.06, u_outer - 0.06);
+            if (abs(clamped - radius) > 0.00001) {
+              vec2 radial = state.xy / radius;
+              state.zw -= radial * dot(state.zw, radial);
+              state.xy = radial * clamped;
+            }
+            outValue = state;
+          }
+        `;
+
+        const addSource = `#version 300 es
+          precision highp float;
+          uniform sampler2D u_state;
+          uniform sampler2D u_k;
+          uniform float u_scale;
+          out vec4 outValue;
+          void main() {
+            ivec2 uv = ivec2(int(gl_FragCoord.x), 0);
+            outValue = texelFetch(u_state, uv, 0) + texelFetch(u_k, uv, 0) * u_scale;
+          }
+        `;
+
+        function compile(type, source) {
+          const shader = gl.createShader(type);
+          gl.shaderSource(shader, source);
+          gl.compileShader(shader);
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.warn(gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+            return null;
+          }
+          return shader;
+        }
+
+        function program(fragmentSource) {
+          const vertex = compile(gl.VERTEX_SHADER, vertexSource);
+          const fragment = compile(gl.FRAGMENT_SHADER, fragmentSource);
+          if (!vertex || !fragment) return null;
+          const p = gl.createProgram();
+          gl.attachShader(p, vertex);
+          gl.attachShader(p, fragment);
+          gl.linkProgram(p);
+          if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+            console.warn(gl.getProgramInfoLog(p));
+            return null;
+          }
+          return p;
+        }
+
+        function texture(data = null, width = count) {
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, 1, 0, gl.RGBA, gl.FLOAT, data);
+          return tex;
+        }
+
+        const derivativeProgram = program(derivativeSource);
+        const addProgram = program(addSource);
+        const finalProgram = program(finalSource);
+        if (!derivativeProgram || !addProgram || !finalProgram) return null;
+
+        const framebuffer = gl.createFramebuffer();
+        const readback = new Float32Array(count * 4);
+        const stateTextures = [texture(), texture()];
+        const tempTextures = [texture(), texture(), texture()];
+        const kTextures = [texture(), texture(), texture(), texture()];
+        const mobileChargeTexture = texture(null, count);
+        const fixedTexture = texture(null, config.positiveCount);
+        const externalTexture = texture(null, config.maxExternalCharges);
+
+        function drawTo(target) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+          gl.viewport(0, 0, count, 1);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+
+        function bindTexture(unit, tex, uniform) {
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.uniform1i(uniform, unit);
+        }
+
+        function runDerivative(stateTex, targetTex) {
+          gl.useProgram(derivativeProgram);
+          bindTexture(0, stateTex, gl.getUniformLocation(derivativeProgram, "u_state"));
+          bindTexture(1, mobileChargeTexture, gl.getUniformLocation(derivativeProgram, "u_mobile_q"));
+          bindTexture(2, fixedTexture, gl.getUniformLocation(derivativeProgram, "u_fixed"));
+          bindTexture(3, externalTexture, gl.getUniformLocation(derivativeProgram, "u_external"));
+          gl.uniform1i(gl.getUniformLocation(derivativeProgram, "u_external_count"), Math.min(externalCharges.length, config.maxExternalCharges));
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_softening"), config.softening);
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_force"), config.forceConstant);
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_inner"), config.innerRadius);
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_outer"), config.outerRadius);
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_wall"), config.electronWall);
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_collision_radius"), config.collisionRadius);
+          gl.uniform1f(gl.getUniformLocation(derivativeProgram, "u_collision_strength"), config.collisionStrength);
+          drawTo(targetTex);
+        }
+
+        function runAdd(stateTex, kTex, scale, targetTex) {
+          gl.useProgram(addProgram);
+          bindTexture(0, stateTex, gl.getUniformLocation(addProgram, "u_state"));
+          bindTexture(1, kTex, gl.getUniformLocation(addProgram, "u_k"));
+          gl.uniform1f(gl.getUniformLocation(addProgram, "u_scale"), scale);
+          drawTo(targetTex);
+        }
+
+        function runFinal(stateTex, writeTex, dt, drag) {
+          gl.useProgram(finalProgram);
+          bindTexture(0, stateTex, gl.getUniformLocation(finalProgram, "u_state"));
+          bindTexture(1, kTextures[0], gl.getUniformLocation(finalProgram, "u_k1"));
+          bindTexture(2, kTextures[1], gl.getUniformLocation(finalProgram, "u_k2"));
+          bindTexture(3, kTextures[2], gl.getUniformLocation(finalProgram, "u_k3"));
+          bindTexture(4, kTextures[3], gl.getUniformLocation(finalProgram, "u_k4"));
+          gl.uniform1f(gl.getUniformLocation(finalProgram, "u_dt"), dt);
+          gl.uniform1f(gl.getUniformLocation(finalProgram, "u_drag"), drag);
+          gl.uniform1f(gl.getUniformLocation(finalProgram, "u_inner"), config.innerRadius);
+          gl.uniform1f(gl.getUniformLocation(finalProgram, "u_outer"), config.outerRadius);
+          gl.uniform1f(gl.getUniformLocation(finalProgram, "u_max_speed"), config.maxElectronSpeed);
+          drawTo(writeTex);
+        }
+
+        return {
+          gl,
+          stateTextures,
+          readback,
+          readIndex: 0,
+          uploadState() {
+            const data = new Float32Array(count * 4);
+            const mobile = mobileCharges();
+            for (let i = 0; i < count; i += 1) {
+              const particle = mobile[i];
+              const offset = i * 4;
+              data[offset] = particle.x;
+              data[offset + 1] = particle.y;
+              data[offset + 2] = particle.vx;
+              data[offset + 3] = particle.vy;
+            }
+            gl.bindTexture(gl.TEXTURE_2D, stateTextures[0]);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, count, 1, gl.RGBA, gl.FLOAT, data);
+            gl.bindTexture(gl.TEXTURE_2D, stateTextures[1]);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, count, 1, gl.RGBA, gl.FLOAT, data);
+            this.readIndex = 0;
+          },
+          uploadMobileCharges() {
+            const data = new Float32Array(count * 4);
+            const mobile = mobileCharges();
+            for (let i = 0; i < count; i += 1) {
+              const charge = mobile[i];
+              const offset = i * 4;
+              data[offset] = charge.q;
+              data[offset + 1] = 0;
+              data[offset + 2] = 0;
+              data[offset + 3] = 0;
+            }
+            gl.bindTexture(gl.TEXTURE_2D, mobileChargeTexture);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, count, 1, gl.RGBA, gl.FLOAT, data);
+          },
+          uploadFixed() {
+            const data = new Float32Array(config.positiveCount * 4);
+            for (let i = 0; i < config.positiveCount; i += 1) {
+              const charge = fixedCharges[i];
+              const offset = i * 4;
+              data[offset] = charge.x;
+              data[offset + 1] = charge.y;
+              data[offset + 2] = charge.q;
+            }
+            gl.bindTexture(gl.TEXTURE_2D, fixedTexture);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, config.positiveCount, 1, gl.RGBA, gl.FLOAT, data);
+          },
+          uploadExternal() {
+            const data = new Float32Array(config.maxExternalCharges * 4);
+            for (let i = 0; i < Math.min(externalCharges.length, config.maxExternalCharges); i += 1) {
+              const charge = externalCharges[i];
+              const offset = i * 4;
+              data[offset] = charge.x;
+              data[offset + 1] = charge.y;
+              data[offset + 2] = charge.q;
+              data[offset + 3] = 0;
+            }
+            gl.bindTexture(gl.TEXTURE_2D, externalTexture);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, config.maxExternalCharges, 1, gl.RGBA, gl.FLOAT, data);
+          },
+          step(dt) {
+            this.uploadFixed();
+            this.uploadExternal();
+            const readTex = stateTextures[this.readIndex];
+            const writeTex = stateTextures[1 - this.readIndex];
+            const drag = Math.exp(-adaptiveDamping * dt);
+            runDerivative(readTex, kTextures[0]);
+            runAdd(readTex, kTextures[0], dt * 0.5, tempTextures[0]);
+            runDerivative(tempTextures[0], kTextures[1]);
+            runAdd(readTex, kTextures[1], dt * 0.5, tempTextures[1]);
+            runDerivative(tempTextures[1], kTextures[2]);
+            runAdd(readTex, kTextures[2], dt, tempTextures[2]);
+            runDerivative(tempTextures[2], kTextures[3]);
+            runFinal(readTex, writeTex, dt, drag);
+            this.readIndex = 1 - this.readIndex;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, writeTex, 0);
+            gl.readPixels(0, 0, count, 1, gl.RGBA, gl.FLOAT, readback);
+            const mobile = mobileCharges();
+            for (let i = 0; i < count; i += 1) {
+              const particle = mobile[i];
+              const offset = i * 4;
+              particle.x = readback[offset];
+              particle.y = readback[offset + 1];
+              particle.vx = readback[offset + 2];
+              particle.vy = readback[offset + 3];
+            }
+            setMobileCharges(mobile);
+          },
+        };
+      }
+
+      function createGpuFieldAverager() {
+        const computeCanvas = document.createElement("canvas");
+        const gl = computeCanvas.getContext("webgl2", { antialias: false, depth: false, stencil: false });
+        if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
+
+        const vertexSource = `#version 300 es
+          precision highp float;
+          void main() {
+            vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);
+            gl_Position = vec4(p, 0.0, 1.0);
+          }
+        `;
+
+        const fragmentSource = `#version 300 es
+          precision highp float;
+          precision highp int;
+          const int ELECTRON_COUNT = ${config.electronCount};
+          const int FIXED_COUNT = ${config.positiveCount};
+          const int MAX_EXTERNAL = ${config.maxExternalCharges};
+          uniform sampler2D u_fixed;
+          uniform sampler2D u_electrons;
+          uniform sampler2D u_external;
+          uniform int u_external_count;
+          uniform vec2 u_origin;
+          uniform float u_unit_scale;
+          uniform float u_screen_height;
+          uniform float u_cell;
+          uniform float u_softening;
+          uniform float u_average_radius;
+          uniform float u_inner;
+          uniform float u_outer;
+          out vec4 outValue;
+
+          vec2 fieldFrom(vec2 p, vec2 source, float q) {
+            vec2 r = p - source;
+            float r2 = max(dot(r, r), u_softening);
+            return q * r / r2;
+          }
+
+          vec2 fieldAt(vec2 p) {
+            vec2 field = vec2(0.0);
+            for (int i = 0; i < FIXED_COUNT; i += 1) {
+              vec4 charge = texelFetch(u_fixed, ivec2(i, 0), 0);
+              field += fieldFrom(p, charge.xy, charge.z);
+            }
+            for (int i = 0; i < ELECTRON_COUNT; i += 1) {
+              vec4 charge = texelFetch(u_electrons, ivec2(i, 0), 0);
+              field += fieldFrom(p, charge.xy, charge.z);
+            }
+            for (int i = 0; i < MAX_EXTERNAL; i += 1) {
+              if (i >= u_external_count) break;
+              vec4 charge = texelFetch(u_external, ivec2(i, 0), 0);
+              field += fieldFrom(p, charge.xy, charge.z);
+            }
+            return field;
+          }
+
+          void main() {
+            vec2 cell = gl_FragCoord.xy - vec2(0.5);
+            float screenX = (cell.x + 0.5) * u_cell;
+            float screenY = u_screen_height - (cell.y + 0.5) * u_cell;
+          vec2 world = vec2((screenX - u_origin.x) / u_unit_scale, (u_origin.y - screenY) / u_unit_scale);
+            float centerRadius = length(world);
+            bool clipToConductor = centerRadius >= u_inner && centerRadius <= u_outer;
+            vec2 sum = vec2(0.0);
+            float count = 0.0;
+            for (int iy = -2; iy <= 2; iy += 1) {
+              for (int ix = -2; ix <= 2; ix += 1) {
+                vec2 offset = vec2(float(ix), float(iy)) * u_average_radius * 0.5;
+                vec2 samplePoint = world + offset;
+                float sampleRadius = length(samplePoint);
+                if (clipToConductor && (sampleRadius < u_inner || sampleRadius > u_outer)) continue;
+                sum += fieldAt(samplePoint);
+                count += 1.0;
+              }
+            }
+            outValue = vec4(count > 0.0 ? sum / count : vec2(0.0), 0.0, 1.0);
+          }
+        `;
+
+        function compile(type, source) {
+          const shader = gl.createShader(type);
+          gl.shaderSource(shader, source);
+          gl.compileShader(shader);
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.warn(gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+            return null;
+          }
+          return shader;
+        }
+
+        const vertex = compile(gl.VERTEX_SHADER, vertexSource);
+        const fragment = compile(gl.FRAGMENT_SHADER, fragmentSource);
+        if (!vertex || !fragment) return null;
+
+        const program = gl.createProgram();
+        gl.attachShader(program, vertex);
+        gl.attachShader(program, fragment);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          console.warn(gl.getProgramInfoLog(program));
+          return null;
+        }
+
+        function texture(width) {
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, 1, 0, gl.RGBA, gl.FLOAT, null);
+          return tex;
+        }
+
+        const framebuffer = gl.createFramebuffer();
+        const fixedTexture = texture(config.positiveCount);
+        const electronTexture = texture(config.electronCount);
+        const externalTexture = texture(config.maxExternalCharges);
+        let outputTexture = null;
+        let readback = new Float32Array(4);
+        let gridColumns = 1;
+        let gridRows = 1;
+
+        function bindTexture(unit, tex, uniformName) {
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.uniform1i(gl.getUniformLocation(program, uniformName), unit);
+        }
+
+        function uploadCharges(tex, charges, width) {
+          const data = new Float32Array(width * 4);
+          for (let i = 0; i < Math.min(charges.length, width); i += 1) {
+            const charge = charges[i];
+            const offset = i * 4;
+            data[offset] = charge.x;
+            data[offset + 1] = charge.y;
+            data[offset + 2] = charge.q;
+            data[offset + 3] = 0;
+          }
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.RGBA, gl.FLOAT, data);
+        }
+
+        return {
+          uploadFixed() {
+            uploadCharges(fixedTexture, fixedCharges, config.positiveCount);
+          },
+          compute() {
+            gridColumns = Math.max(1, Math.ceil(width / config.fieldCellSize));
+            gridRows = Math.max(1, Math.ceil(height / config.fieldCellSize));
+            if (!outputTexture || computeCanvas.width !== gridColumns || computeCanvas.height !== gridRows) {
+              computeCanvas.width = gridColumns;
+              computeCanvas.height = gridRows;
+              outputTexture = gl.createTexture();
+              gl.bindTexture(gl.TEXTURE_2D, outputTexture);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gridColumns, gridRows, 0, gl.RGBA, gl.FLOAT, null);
+              readback = new Float32Array(gridColumns * gridRows * 4);
+            }
+
+            uploadCharges(fixedTexture, fixedCharges, config.positiveCount);
+            uploadCharges(electronTexture, electrons, config.electronCount);
+            uploadCharges(externalTexture, externalCharges, config.maxExternalCharges);
+            gl.useProgram(program);
+            bindTexture(0, fixedTexture, "u_fixed");
+            bindTexture(1, electronTexture, "u_electrons");
+            bindTexture(2, externalTexture, "u_external");
+            gl.uniform1i(gl.getUniformLocation(program, "u_external_count"), Math.min(externalCharges.length, config.maxExternalCharges));
+            gl.uniform2f(gl.getUniformLocation(program, "u_origin"), originX, originY);
+            gl.uniform1f(gl.getUniformLocation(program, "u_unit_scale"), unitScale);
+            gl.uniform1f(gl.getUniformLocation(program, "u_screen_height"), height);
+            gl.uniform1f(gl.getUniformLocation(program, "u_cell"), config.fieldCellSize);
+            gl.uniform1f(gl.getUniformLocation(program, "u_softening"), config.softening);
+            gl.uniform1f(gl.getUniformLocation(program, "u_average_radius"), config.fieldAverageRadius);
+            gl.uniform1f(gl.getUniformLocation(program, "u_inner"), config.innerRadius);
+            gl.uniform1f(gl.getUniformLocation(program, "u_outer"), config.outerRadius);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, outputTexture, 0);
+            gl.viewport(0, 0, gridColumns, gridRows);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            gl.readPixels(0, 0, gridColumns, gridRows, gl.RGBA, gl.FLOAT, readback);
+            return { data: readback, columns: gridColumns, rows: gridRows };
+          },
+        };
+      }
+
+      function accelerationForMobile(index, state) {
+        const sources = [...state, ...externalCharges];
+        const particle = state[index];
+        const field = fieldFromSources(particle.x, particle.y, sources, fixedCharges.length + index);
+        let ax = particle.q * field.x * config.forceConstant;
+        let ay = particle.q * field.y * config.forceConstant;
+        const r = Math.hypot(particle.x, particle.y) || 1;
+
+        for (let i = 0; i < state.length; i += 1) {
+          if (i === index) continue;
+          const other = state[i];
+          const dx = particle.x - other.x;
+          const dy = particle.y - other.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance > 0.0001 && distance < config.collisionRadius) {
+            const push = (config.collisionRadius - distance) * config.collisionStrength / distance;
+            ax += dx * push;
+            ay += dy * push;
+          }
+        }
+
+        if (r < config.innerRadius + 0.08) {
+          const push = (config.innerRadius + 0.08 - r) * config.electronWall;
+          ax += particle.x / r * push;
+          ay += particle.y / r * push;
+        } else if (r > config.outerRadius - 0.08) {
+          const push = (r - config.outerRadius + 0.08) * config.electronWall;
+          ax -= particle.x / r * push;
+          ay -= particle.y / r * push;
+        }
+
+        return { ax, ay };
+      }
+
+      function derivative(state) {
+        return state.map((particle, index) => {
+          const acceleration = accelerationForMobile(index, state);
+          return {
+            dx: particle.vx,
+            dy: particle.vy,
+            dvx: acceleration.ax,
+            dvy: acceleration.ay,
+          };
+        });
+      }
+
+      function addScaledState(state, deriv, scale) {
+        return state.map((particle, index) => ({
+          x: particle.x + deriv[index].dx * scale,
+          y: particle.y + deriv[index].dy * scale,
+          vx: particle.vx + deriv[index].dvx * scale,
+          vy: particle.vy + deriv[index].dvy * scale,
+          q: particle.q,
+        }));
+      }
+
+      function integrateElectronsCpu(dt) {
+        const mobile = mobileCharges();
+        if (mobile.length === 0) return;
+
+        const k1 = derivative(mobile);
+        const k2 = derivative(addScaledState(mobile, k1, dt * 0.5));
+        const k3 = derivative(addScaledState(mobile, k2, dt * 0.5));
+        const k4 = derivative(addScaledState(mobile, k3, dt));
+        const drag = Math.exp(-adaptiveDamping * dt);
+
+        for (let i = 0; i < mobile.length; i += 1) {
+          const particle = mobile[i];
+          particle.x += dt / 6 * (k1[i].dx + 2 * k2[i].dx + 2 * k3[i].dx + k4[i].dx);
+          particle.y += dt / 6 * (k1[i].dy + 2 * k2[i].dy + 2 * k3[i].dy + k4[i].dy);
+          particle.vx += dt / 6 * (k1[i].dvx + 2 * k2[i].dvx + 2 * k3[i].dvx + k4[i].dvx);
+          particle.vy += dt / 6 * (k1[i].dvy + 2 * k2[i].dvy + 2 * k3[i].dvy + k4[i].dvy);
+          particle.vx *= drag;
+          particle.vy *= drag;
+
+          const speed = Math.hypot(particle.vx, particle.vy);
+          if (speed > config.maxElectronSpeed) {
+            const limit = config.maxElectronSpeed / speed;
+            particle.vx *= limit;
+            particle.vy *= limit;
+          }
+
+          const projected = projectToConductor(particle);
+          if (projected.x !== particle.x || projected.y !== particle.y) {
+            const r = Math.hypot(particle.x, particle.y) || 1;
+            const radialV = (particle.vx * particle.x + particle.vy * particle.y) / r;
+            particle.vx -= radialV * particle.x / r;
+            particle.vy -= radialV * particle.y / r;
+            particle.x = projected.x;
+            particle.y = projected.y;
+          }
+        }
+
+        setMobileCharges(mobile);
+      }
+
+      function integrateElectrons(dt) {
+        if (gpuIntegrator) {
+          gpuIntegrator.step(dt);
+        } else {
+          integrateElectronsCpu(dt);
+        }
+      }
+
+      function kineticEnergy() {
+        return mobileCharges().reduce((sum, particle) => sum + 0.5 * (particle.vx * particle.vx + particle.vy * particle.vy), 0);
+      }
+
+      function kineticEnergyPerParticle() {
+        const particles = mobileCharges();
+        return particles.length ? kineticEnergy() / particles.length : 0;
+      }
+
+      function tuneDamping() {
+        const ke = kineticEnergyPerParticle();
+
+        if (ke > config.dampingKineticEnergyMax) {
+          adaptiveDamping = Math.min(8, adaptiveDamping * 1.035 + 0.02);
+        } else if (ke < config.dampingKineticEnergyMin) {
+          adaptiveDamping = Math.max(0.0001, adaptiveDamping * 0.96 - 0.01);
+        } else {
+          adaptiveDamping = adaptiveDamping * 0.995 + 0.7 * 0.005;
+        }
+      }
+
+      function updateProbe(dt) {
+        const field = fieldAt(probe.bobX, probe.bobY);
+        const spring = Number(controls.spring.value);
+        const damping = 0.9;
+        const ax = field.x * 8 + (probe.anchorX - probe.bobX) * spring - probe.vx * damping;
+        const ay = field.y * 8 + (probe.anchorY - probe.bobY) * spring - probe.vy * damping;
+
+        probe.vx += ax * dt;
+        probe.vy += ay * dt;
+        probe.bobX += probe.vx * dt;
+        probe.bobY += probe.vy * dt;
+
+        const dx = probe.bobX - probe.anchorX;
+        const dy = probe.bobY - probe.anchorY;
+        const offset = Math.hypot(dx, dy);
+        if (offset > 1.25) {
+          const limit = 1.25 / offset;
+          probe.bobX = probe.anchorX + dx * limit;
+          probe.bobY = probe.anchorY + dy * limit;
+          probe.vx *= 0.5;
+          probe.vy *= 0.5;
+        }
+      }
+
+      function drawArrow(x, y, vx, vy, length, color, lineWidth = 1) {
+        const magnitude = Math.hypot(vx, vy);
+        if (magnitude < 0.000001) return;
+        const ux = vx / magnitude;
+        const uy = vy / magnitude;
+        const endX = x + ux * length;
+        const endY = y - uy * length;
+        const startX = x - ux * length * 0.35;
+        const startY = y + uy * length * 0.35;
+        const sideX = -uy;
+        const sideY = -ux;
+        const head = Math.max(4, Math.min(10, length * 0.32));
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - ux * head + sideX * head * 0.55, endY + uy * head + sideY * head * 0.55);
+        ctx.lineTo(endX - ux * head - sideX * head * 0.55, endY + uy * head - sideY * head * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = "#05070b";
+        ctx.fillRect(0, 0, width, height);
+        const gradient = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.75);
+        gradient.addColorStop(0, "#141b2a");
+        gradient.addColorStop(0.58, "#06080d");
+        gradient.addColorStop(1, "#020306");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      function drawGrid() {
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.07)";
+        ctx.lineWidth = 1;
+        for (let x = originX % unitScale; x < width; x += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+        for (let y = originY % unitScale; y < height; y += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function renderPotentialMap() {
+        const mapWidth = potentialCanvas.width;
+        const mapHeight = potentialCanvas.height;
+        const image = potentialCtx.createImageData(mapWidth, mapHeight);
+        const data = image.data;
+        const values = new Float32Array(mapWidth * mapHeight);
+        let minValue = Infinity;
+        let maxValue = -Infinity;
+
+        for (let py = 0; py < mapHeight; py += 1) {
+          for (let px = 0; px < mapWidth; px += 1) {
+            const world = toWorld({ x: (px + 0.5) * config.potentialCellSize, y: (py + 0.5) * config.potentialCellSize });
+            const potential = potentialAt(world.x, world.y);
+            const compressed = Math.sign(potential) * Math.log1p(Math.abs(potential));
+            const index = py * mapWidth + px;
+            values[index] = compressed;
+            minValue = Math.min(minValue, compressed);
+            maxValue = Math.max(maxValue, compressed);
+          }
+        }
+
+        const range = Math.max(0.0001, maxValue - minValue);
+        for (let i = 0; i < values.length; i += 1) {
+          const gray = Math.round(18 + (values[i] - minValue) / range * 226);
+          const offset = i * 4;
+          data[offset] = gray;
+          data[offset + 1] = gray;
+          data[offset + 2] = gray;
+          data[offset + 3] = 255;
+        }
+
+        potentialCtx.putImageData(image, 0, 0);
+        potentialDirty = false;
+      }
+
+      function drawPotential() {
+        if (potentialDirty) renderPotentialMap();
+        ctx.save();
+        ctx.globalAlpha = 0.84;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(potentialCanvas, 0, 0, width, height);
+        ctx.restore();
+      }
+
+      function drawField() {
+        const cell = config.fieldCellSize;
+        const fieldScale = Number(controls.fieldScale.value);
+        const columns = Math.max(1, Math.ceil(width / cell));
+        const rows = Math.max(1, Math.ceil(height / cell));
+        const raw = new Float32Array(columns * rows * 2);
+
+        if (gpuFieldAverager) {
+          const result = gpuFieldAverager.compute();
+          for (let row = 0; row < rows; row += 1) {
+            for (let column = 0; column < columns; column += 1) {
+              const sourceOffset = (row * result.columns + column) * 4;
+              const offset = (row * columns + column) * 2;
+              raw[offset] = result.data[sourceOffset];
+              raw[offset + 1] = result.data[sourceOffset + 1];
+            }
+          }
+        } else {
+          for (let row = 0; row < rows; row += 1) {
+            for (let column = 0; column < columns; column += 1) {
+              const sx = (column + 0.5) * cell;
+              const sy = height - (row + 0.5) * cell;
+              const world = toWorld({ x: sx, y: sy });
+              const field = averagedFieldAt(world.x, world.y);
+              const offset = (row * columns + column) * 2;
+              raw[offset] = field.x;
+              raw[offset + 1] = field.y;
+            }
+          }
+        }
+
+        if (!smoothedFieldGrid || smoothedFieldGrid.columns !== columns || smoothedFieldGrid.rows !== rows) {
+          smoothedFieldGrid = { columns, rows, data: raw.slice() };
+        } else {
+          const alpha = config.fieldTemporalAlpha;
+          for (let i = 0; i < raw.length; i += 1) {
+            smoothedFieldGrid.data[i] += (raw[i] - smoothedFieldGrid.data[i]) * alpha;
+          }
+        }
+
+        for (let row = 0; row < rows; row += 1) {
+          for (let column = 0; column < columns; column += 1) {
+            const sx = (column + 0.5) * cell;
+            const sy = height - (row + 0.5) * cell;
+            const offset = (row * columns + column) * 2;
+            drawFieldArrow(sx, sy, {
+              x: smoothedFieldGrid.data[offset],
+              y: smoothedFieldGrid.data[offset + 1],
+            }, fieldScale);
+          }
+        }
+      }
+
+      function drawFieldArrow(sx, sy, field, fieldScale) {
+        const magnitude = Math.hypot(field.x, field.y);
+        if (magnitude < 0.002) return;
+        const strength = Math.min(1, Math.log1p(magnitude * fieldScale * 0.18) / 4.1);
+        const length = 16 * Math.pow(strength, 0.55);
+        const brightness = Math.pow(strength, 0.72);
+        const alpha = 0.16 + brightness * 0.62;
+        const red = Math.round(36 + brightness * 210);
+        const green = Math.round(92 + brightness * 145);
+        const blue = Math.round(132 + brightness * 118);
+        drawArrow(sx, sy, field.x, field.y, length, `rgba(${red}, ${green}, ${blue}, ${alpha})`, 0.7 + brightness * 0.9);
+      }
+
+      function drawRing() {
+        const outer = config.outerRadius * unitScale;
+        const inner = config.innerRadius * unitScale;
+        ctx.save();
+        ctx.fillStyle = "rgba(118, 132, 150, 0.22)";
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.42)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(originX, originY, outer, 0, Math.PI * 2);
+        ctx.arc(originX, originY, inner, 0, Math.PI * 2, true);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.24)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(originX, originY, inner, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawChargeGlyph(point, q, radius, selected = false, fixed = false) {
+        const screen = toScreen(point);
+        const positive = q >= 0;
+        const color = positive ? "#ff5a78" : "#4ea9ff";
+        const glow = positive ? "rgba(255, 86, 117, 0.5)" : "rgba(78, 169, 255, 0.5)";
+
+        ctx.save();
+        ctx.shadowColor = glow;
+        ctx.shadowBlur = fixed ? 4 : 13;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = selected ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.44)";
+        ctx.lineWidth = selected ? 2.4 : 1;
+        ctx.stroke();
+        if (radius >= 7) {
+          ctx.fillStyle = "#ffffff";
+          ctx.font = `700 ${Math.max(10, radius + 2)}px Inter, ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(positive ? "+" : "-", screen.x, screen.y - 0.5);
+        }
+        ctx.restore();
+      }
+
+      function drawCharges() {
+        for (const charge of fixedCharges) {
+          drawChargeGlyph(charge, charge.q, 2.1, false, true);
+        }
+        for (const electron of electrons) {
+          drawChargeGlyph(electron, electron.q, 2.5, false, true);
+        }
+        for (let i = 0; i < externalCharges.length; i += 1) {
+          const charge = externalCharges[i];
+          drawChargeGlyph(charge, charge.q, 12 + Math.min(7, Math.abs(charge.q) * 2.5), i === selectedExternal);
+        }
+      }
+
+      function drawProbe() {
+        const anchor = toScreen({ x: probe.anchorX, y: probe.anchorY });
+        const bob = toScreen({ x: probe.bobX, y: probe.bobY });
+        const field = fieldAt(probe.anchorX, probe.anchorY);
+        const fieldMagnitude = Math.hypot(field.x, field.y);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.38)";
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(anchor.x, anchor.y);
+        ctx.lineTo(bob.x, bob.y);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(237, 242, 255, 0.13)";
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.8)";
+        ctx.beginPath();
+        ctx.arc(anchor.x, anchor.y, 11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowColor = "rgba(255, 244, 180, 0.65)";
+        ctx.shadowBlur = 16;
+        ctx.fillStyle = "#fff4b4";
+        ctx.beginPath();
+        ctx.arc(bob.x, bob.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.stroke();
+        ctx.fillStyle = "rgba(237, 242, 255, 0.86)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`E ${fieldMagnitude.toFixed(2)}`, anchor.x + 16, anchor.y - 16);
+        ctx.restore();
+      }
+
+      function externalChargeAt(screenX, screenY) {
+        for (let i = externalCharges.length - 1; i >= 0; i -= 1) {
+          const screen = toScreen(externalCharges[i]);
+          if (Math.hypot(screenX - screen.x, screenY - screen.y) <= 23) return i;
+        }
+        return -1;
+      }
+
+      function overProbeAnchor(screenX, screenY) {
+        const anchor = toScreen({ x: probe.anchorX, y: probe.anchorY });
+        return Math.hypot(screenX - anchor.x, screenY - anchor.y) <= 20;
+      }
+
+      function addExternalCharge(point) {
+        if (inConductorMaterial(point)) return;
+        if (externalCharges.length >= config.maxExternalCharges) return;
+        externalCharges.push({ x: point.x, y: point.y, q: Number(controls.newCharge.value) * config.externalChargeScale });
+        selectedExternal = externalCharges.length - 1;
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      function deleteSelectedExternal() {
+        if (selectedExternal < 0) return;
+        externalCharges.splice(selectedExternal, 1);
+        selectedExternal = Math.min(selectedExternal, externalCharges.length - 1);
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      function adjustExternalCharge(index, delta) {
+        if (index < 0 || !externalCharges[index]) return;
+        const limit = 8 * config.externalChargeScale;
+        externalCharges[index].q = Math.max(-limit, Math.min(limit, externalCharges[index].q + delta * 0.25 * config.externalChargeScale));
+        if (Math.abs(externalCharges[index].q) < 0.001) externalCharges[index].q = 0;
+        selectedExternal = index;
+        potentialDirty = true;
+        updateLabels();
+      }
+
+      function updateLabels() {
+        const ke = kineticEnergyPerParticle();
+        outputs.newCharge.textContent = formatCharge(Number(controls.newCharge.value));
+        outputs.fieldScale.textContent = controls.fieldScale.value;
+        outputs.simSpeed.textContent = (Number(controls.simSpeed.value) / 100).toFixed(2);
+        outputs.spring.textContent = controls.spring.value;
+        toggleModeButton.textContent = mode === "field" ? "Field" : "Potential";
+        toggleModeButton.classList.toggle("active", mode === "field");
+        pauseButton.textContent = paused ? "Resume" : "Pause";
+        deleteChargeButton.disabled = selectedExternal < 0;
+        const backend = gpuIntegrator ? "GPU RK4" : "CPU RK4";
+        const fieldBackend = gpuFieldAverager ? "GPU field avg" : "CPU field avg";
+        stats.textContent = `ring: R_inner = 3, R_outer = 9; ${externalCharges.length} external; KE/particle ${ke.toFixed(2)} (damp > ${config.dampingKineticEnergyMax}); damping ${adaptiveDamping.toFixed(2)}; ${backend}; ${fieldBackend}`;
+      }
+
+      function draw() {
+        drawBackground();
+        if (mode === "potential") drawPotential();
+        drawGrid();
+        if (mode === "field") drawField();
+        drawRing();
+        drawCharges();
+        drawProbe();
+      }
+
+      function animate(time) {
+        const rawDt = Math.min(0.035, Math.max(0.001, (time - lastTime) / 1000));
+        const speed = Number(controls.simSpeed.value) / 100;
+        lastTime = time;
+
+        if (!paused && speed > 0) {
+          const dt = rawDt * speed;
+          integrateElectrons(dt);
+          tuneDamping();
+          potentialDirty = true;
+        }
+
+        updateProbe(rawDt);
+        draw();
+        updateLabels();
+        requestAnimationFrame(animate);
+      }
+
+      for (const control of Object.values(controls)) {
+        control.addEventListener("input", () => {
+          potentialDirty = true;
+          updateLabels();
+        });
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const pos = pointerPosition(event);
+        const world = toWorld(pos);
+        const index = externalChargeAt(pos.x, pos.y);
+        pointer = { active: true, moved: false, target: "none", chargeIndex: index, downX: pos.x, downY: pos.y };
+        canvas.setPointerCapture(event.pointerId);
+
+        if ((event.shiftKey || event.button === 2) && index >= 0) {
+          selectedExternal = index;
+          deleteSelectedExternal();
+          pointer.target = "deleted";
+          return;
+        }
+
+        if (index >= 0) {
+          selectedExternal = index;
+          pointer.target = "charge";
+          canvas.style.cursor = "grabbing";
+          updateLabels();
+          return;
+        }
+
+        if (overProbeAnchor(pos.x, pos.y)) {
+          pointer.target = "probe";
+          canvas.style.cursor = "grabbing";
+          return;
+        }
+
+        if (!inConductorMaterial(world)) {
+          pointer.target = "add";
+        }
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        const pos = pointerPosition(event);
+        const world = toWorld(pos);
+
+        if (!pointer.active) {
+          canvas.style.cursor = externalChargeAt(pos.x, pos.y) >= 0 || overProbeAnchor(pos.x, pos.y) ? "grab" : "crosshair";
+          return;
+        }
+
+        if (Math.hypot(pos.x - pointer.downX, pos.y - pointer.downY) > 4) pointer.moved = true;
+
+        if (pointer.target === "probe") {
+          probe.anchorX = world.x;
+          probe.anchorY = world.y;
+          canvas.style.cursor = "grabbing";
+        } else if (pointer.target === "charge" && externalCharges[pointer.chargeIndex]) {
+          if (!inConductorMaterial(world)) {
+            externalCharges[pointer.chargeIndex].x = world.x;
+            externalCharges[pointer.chargeIndex].y = world.y;
+            potentialDirty = true;
+          }
+          canvas.style.cursor = "grabbing";
+        }
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        const pos = pointerPosition(event);
+        const world = toWorld(pos);
+        const clickedEmpty = pointer.active && !pointer.moved && pointer.target === "add" && event.button === 0;
+
+        if (pointer.active) canvas.releasePointerCapture(event.pointerId);
+        pointer.active = false;
+        canvas.style.cursor = "crosshair";
+
+        if (clickedEmpty) addExternalCharge(world);
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        pointer.active = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const pos = pointerPosition(event);
+        const index = externalChargeAt(pos.x, pos.y);
+        adjustExternalCharge(index >= 0 ? index : selectedExternal, event.deltaY < 0 ? 1 : -1);
+      }, { passive: false });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Delete" || event.key === "Backspace") {
+          deleteSelectedExternal();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          adjustExternalCharge(selectedExternal, 1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          adjustExternalCharge(selectedExternal, -1);
+        }
+      });
+
+      toggleModeButton.addEventListener("click", () => {
+        mode = mode === "field" ? "potential" : "field";
+        potentialDirty = true;
+        updateLabels();
+      });
+
+      pauseButton.addEventListener("click", () => {
+        paused = !paused;
+        updateLabels();
+      });
+
+      resetConductorButton.addEventListener("click", resetConductor);
+      resetProbeButton.addEventListener("click", resetProbe);
+      deleteChargeButton.addEventListener("click", deleteSelectedExternal);
+      clearExternalButton.addEventListener("click", () => {
+        externalCharges = [];
+        selectedExternal = -1;
+        potentialDirty = true;
+        updateLabels();
+      });
+      window.addEventListener("resize", resize);
+
+      resize();
+      resetConductor();
+      resetProbe();
+      requestAnimationFrame(animate);
+    })();
+  </script>
+</body>
+</html>

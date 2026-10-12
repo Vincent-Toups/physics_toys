@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Charge Vector Decomposition</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #05070b; color: #edf2ff; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; background: radial-gradient(circle at 52% 46%, #141b2a, #06080d 58%, #020306); cursor: crosshair; touch-action: none; }
+    .panel { position: fixed; z-index: 2; top: 16px; left: 16px; width: min(390px, calc(100vw - 32px)); padding: 14px; border: 1px solid #ffffff29; border-radius: 9px; background: #070a12c7; box-shadow: 0 16px 42px #00000059; backdrop-filter: blur(14px); user-select: none; }
+    h1 { margin: 0 0 5px; font-size: 16px; letter-spacing: .01em; }
+    .subtitle { margin-bottom: 12px; color: #90a0bb; font-size: 11px; line-height: 1.4; }
+    .row { display: grid; grid-template-columns: 118px 1fr 48px; gap: 9px; align-items: center; min-height: 29px; font-size: 12px; }
+    .row + .row { margin-top: 7px; }
+    label { color: #b9c5db; white-space: nowrap; }
+    input[type=range] { width: 100%; accent-color: #69e2ff; }
+    output { text-align: right; font-variant-numeric: tabular-nums; }
+    .buttons, .legend { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+    button { min-height: 32px; padding: 0 11px; border: 1px solid #ffffff29; border-radius: 6px; background: #ffffff14; color: #edf2ff; font: inherit; font-size: 12px; cursor: pointer; }
+    button:hover, button.active { background: #69e2ff2e; border-color: #69e2ff59; }
+    .legend { gap: 10px; color: #b9c5db; font-size: 11px; }
+    .key { display: inline-flex; align-items: center; gap: 5px; }
+    .swatch { width: 9px; height: 9px; border-radius: 50%; }
+    .readout { margin-top: 11px; color: #dce7ff; font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+    .hint { margin-top: 9px; color: #90a0bb; font-size: 11px; line-height: 1.4; }
+    @media (max-width: 520px) { .panel { top: 10px; left: 10px; width: calc(100vw - 20px); } .row { grid-template-columns: 98px 1fr 44px; } }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Decompose the electric field along a closed loop into individual charge vectors and their sum"></canvas>
+  <section class="panel">
+    <h1>Charge vector decomposition</h1>
+    <div class="subtitle">At every grid point, compare each charge’s contribution with the vector sum.</div>
+    <div class="row"><label for="newCharge">New charge</label><input id="newCharge" type="range" min="-3" max="3" step=".1" value="1"><output id="newChargeOut">+1.0</output></div>
+    <div class="row"><label for="gridSpacing">Grid spacing</label><input id="gridSpacing" type="range" min="32" max="80" step="2" value="52"><output id="gridSpacingOut">52</output></div>
+    <div class="row"><label for="vectorScale">Vector scale</label><input id="vectorScale" type="range" min="10" max="160" step="1" value="58"><output id="vectorScaleOut">58</output></div>
+    <div class="buttons"><button id="toggleParts" class="active" type="button">Individual vectors</button><button id="toggleGrid" class="active" type="button">Grid field</button><button id="drawLoop" type="button">Draw loop</button><button id="clearLoop" type="button">Clear loop</button><button id="deleteCharge" type="button">Delete charge</button></div>
+    <div class="legend" id="legend"></div>
+    <div class="readout" id="readout">Hover a grid point to inspect its vectors.</div>
+    <div class="hint">Drag charges to move them. Click empty space to add a charge. Drag “Draw loop” mode to sketch a closed path. Shift-click or right-click a charge to delete it.</div>
+  </section>
+  <script>
+    (() => {
+      "use strict";
+      const canvas = document.getElementById("canvas"), ctx = canvas.getContext("2d", { alpha: false });
+      const controls = { newCharge: document.getElementById("newCharge"), gridSpacing: document.getElementById("gridSpacing"), vectorScale: document.getElementById("vectorScale") };
+      const outputs = { newCharge: document.getElementById("newChargeOut"), gridSpacing: document.getElementById("gridSpacingOut"), vectorScale: document.getElementById("vectorScaleOut") };
+      const partsButton = document.getElementById("toggleParts"), gridButton = document.getElementById("toggleGrid"), drawButton = document.getElementById("drawLoop"), clearButton = document.getElementById("clearLoop"), deleteButton = document.getElementById("deleteCharge"), legend = document.getElementById("legend"), readout = document.getElementById("readout");
+      let width = 0, height = 0, dpr = 1, unit = 1, ox = 0, oy = 0, showParts = true, showGrid = true, drawMode = false, hover = -1;
+      // Two vertical "plates": evenly spaced point charges with opposite signs.
+      let charges = [
+        { x: -1.15, y: -1.5, q: 1 }, { x: -1.15, y: -1.0, q: 1 }, { x: -1.15, y: -.5, q: 1 },
+        { x: -1.15, y: 0, q: 1 }, { x: -1.15, y: .5, q: 1 }, { x: -1.15, y: 1.0, q: 1 }, { x: -1.15, y: 1.5, q: 1 },
+        { x: 1.15, y: -1.5, q: -1 }, { x: 1.15, y: -1.0, q: -1 }, { x: 1.15, y: -.5, q: -1 },
+        { x: 1.15, y: 0, q: -1 }, { x: 1.15, y: .5, q: -1 }, { x: 1.15, y: 1.0, q: -1 }, { x: 1.15, y: 1.5, q: -1 },
+      ], selected = 0, path = defaultPath(), pointer = null;
+      const colors = ["#ff8b5c", "#a78bfa", "#63e6be", "#ffd166", "#f783ac", "#74c0fc"];
+      function signed(n, digits = 1) { return Math.abs(n) < .0005 ? (0).toFixed(digits) : (n > 0 ? "+" : "") + n.toFixed(digits); }
+      function defaultPath() { return [{x:-1.7,y:-.65},{x:-.35,y:-1.05},{x:1.45,y:-.45},{x:1.25,y:.95},{x:-.65,y:1.1},{x:-1.75,y:.25}]; }
+      function resize() { dpr = Math.max(1, devicePixelRatio || 1); width = innerWidth; height = innerHeight; canvas.width = width*dpr; canvas.height = height*dpr; canvas.style.width = width+"px"; canvas.style.height = height+"px"; ctx.setTransform(dpr,0,0,dpr,0,0); unit = Math.min(width,height)*.18; ox = width*.52; oy = height*.53; draw(); }
+      function screen(p) { return { x: ox+p.x*unit, y: oy-p.y*unit }; }
+      function world(p) { return { x:(p.x-ox)/unit, y:(oy-p.y)/unit }; }
+      function pos(e) { const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; }
+      function contribution(charge, x, y) { const dx=x-charge.x, dy=y-charge.y, r2=Math.max(dx*dx+dy*dy,.0025); return {x:charge.q*dx/r2,y:charge.q*dy/r2}; }
+      function vectors(x,y) { const parts=charges.map(c=>contribution(c,x,y)), sum=parts.reduce((a,v)=>({x:a.x+v.x,y:a.y+v.y}),{x:0,y:0}); return {parts,sum}; }
+      function arrow(x,y,v,length,color,weight=1.5) { const m=Math.hypot(v.x,v.y); if(m<1e-5)return; const ux=v.x/m, uy=v.y/m, ex=x+ux*length, ey=y-uy*length, sx=x-ux*length*.22, sy=y+uy*length*.22, hx=-uy, hy=-ux, head=Math.max(4,Math.min(10,length*.3)); ctx.save(); ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=weight; ctx.lineCap="round"; ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(ex,ey);ctx.stroke();ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-ux*head+hx*head*.55,ey+uy*head+hy*head*.55);ctx.lineTo(ex-ux*head-hx*head*.55,ey+uy*head-hy*head*.55);ctx.closePath();ctx.fill();ctx.restore(); }
+      function length(v) { return Math.min(82, 7+Math.log1p(Math.hypot(v.x,v.y)*Number(controls.vectorScale.value)*.42)*13); }
+      function drawGrid() { ctx.save(); ctx.strokeStyle="#edf2ff14";ctx.lineWidth=1; for(let x=ox%unit;x<width;x+=unit){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,height);ctx.stroke();} for(let y=oy%unit;y<height;y+=unit){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();} ctx.strokeStyle="#edf2ff42";ctx.beginPath();ctx.moveTo(0,oy);ctx.lineTo(width,oy);ctx.moveTo(ox,0);ctx.lineTo(ox,height);ctx.stroke();ctx.restore(); }
+      function samples() { if(path.length<2)return []; const out=[], n=Number(controls.sampleCount.value); for(let i=0;i<n;i++){const a=path[i%path.length],b=path[(i+1)%path.length],t=i/n;out.push({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t});} return out; }
+      function gridPoints() { const points=[], spacing=Number(controls.gridSpacing.value); for(let y=spacing/2;y<height;y+=spacing)for(let x=spacing/2;x<width;x+=spacing)points.push({x,y}); return points; }
+      function drawFieldGrid() { for(const point of gridPoints()){const v=vectors(...Object.values(world(point))).sum; arrow(point.x,point.y,v,length(v)*.42,"#69c6ff55",1); } }
+      function drawPath(points) { if(points.length<2)return; ctx.save();ctx.strokeStyle="#fff4b1f2";ctx.lineWidth=3;ctx.lineJoin="round";ctx.beginPath();let p=screen(points[0]);ctx.moveTo(p.x,p.y);for(let i=1;i<=points.length;i++){p=screen(points[i%points.length]);ctx.lineTo(p.x,p.y);}ctx.stroke();ctx.restore(); }
+      function drawGridVectors() { const points=gridPoints(), spread=showParts?Math.min(13,points.length?charges.length*.55:0):0; points.forEach((point,i)=>{const p=world(point),vs=vectors(p.x,p.y);if(i===hover){ctx.fillStyle="#ffffff";ctx.beginPath();ctx.arc(point.x,point.y,5,0,Math.PI*2);ctx.fill();}if(showParts)vs.parts.forEach((v,j)=>arrow(point.x+(j-(vs.parts.length-1)/2)*spread,point.y,v,length(v),colors[j%colors.length],1.25));arrow(point.x,point.y,vs.sum,length(vs.sum),"#f8fbff",3.1);if(i===hover){ctx.fillStyle="#edf2ff";ctx.font="11px Inter, sans-serif";ctx.fillText("grid point "+(i+1),point.x+10,point.y-11);}}); }
+      function drawCharges() { charges.forEach((c,i)=>{const s=screen(c), positive=c.q>=0, color=positive?"#ff5a78":"#4ea9ff";ctx.save();ctx.shadowColor=color;ctx.shadowBlur=18;ctx.fillStyle=color;ctx.beginPath();ctx.arc(s.x,s.y,12+Math.min(7,Math.abs(c.q)*2.5),0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=i===selected?"#fff":"#ffffffc7";ctx.lineWidth=i===selected?2.5:1.5;ctx.stroke();ctx.fillStyle="#fff";ctx.font="700 18px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(positive?"+":"−",s.x,s.y-1);ctx.restore();}); }
+      function updateReadout() { if(hover<0)return;const point=gridPoints()[hover],p=world(point),v=vectors(p.x,p.y);readout.innerHTML=`grid point ${hover+1}: (${p.x.toFixed(2)}, ${p.y.toFixed(2)})<br>${v.parts.map((x,i)=>`<span style="color:${colors[i%colors.length]}">q${i+1} (${x.x.toFixed(2)}, ${x.y.toFixed(2)})</span>`).join(" · ")}<br><strong>ΣE = (${v.sum.x.toFixed(2)}, ${v.sum.y.toFixed(2)})</strong>`; }
+      function updateLegend() { legend.innerHTML=charges.map((c,i)=>`<span class="key"><span class="swatch" style="background:${colors[i%colors.length]}"></span>q${i+1} ${signed(c.q)}</span>`).join("")+`<span class="key"><span class="swatch" style="background:#f8fbff"></span>Σ</span>`; deleteButton.disabled=selected<0; updateReadout(); }
+      function draw() { ctx.fillStyle="#05070b";ctx.fillRect(0,0,width,height);if(showGrid){drawGrid();drawGridVectors();}drawPath(path);drawCharges();updateLegend(); }
+      function hitCharge(p){for(let i=charges.length-1;i>=0;i--){const s=screen(charges[i]);if(Math.hypot(p.x-s.x,p.y-s.y)<23)return i;}return -1;}
+      function hitSample(p){const ss=gridPoints();let best=-1,dist=20;ss.forEach((q,i)=>{const d=Math.hypot(p.x-q.x,p.y-q.y);if(d<dist){best=i;dist=d;}});return best;}
+      function mark() { draw(); }
+      Object.keys(controls).forEach(k=>controls[k].addEventListener("input",()=>{outputs[k].textContent=k==="newCharge"?signed(Number(controls[k].value)):controls[k].value;mark();}));
+      partsButton.onclick=()=>{showParts=!showParts;partsButton.classList.toggle("active",showParts);mark();}; gridButton.onclick=()=>{showGrid=!showGrid;gridButton.classList.toggle("active",showGrid);mark();};
+      drawButton.onclick=()=>{drawMode=!drawMode;drawButton.classList.toggle("active",drawMode);canvas.style.cursor=drawMode?"crosshair":"crosshair";}; clearButton.onclick=()=>{path=[];mark();}; deleteButton.onclick=()=>{if(selected>=0){charges.splice(selected,1);selected=Math.min(selected,charges.length-1);mark();}};
+      canvas.onpointerdown=e=>{const p=pos(e),h=hitCharge(p);canvas.setPointerCapture(e.pointerId);pointer={start:p,target:h>=0?"charge":drawMode?"path":"none",index:h,moved:false};if((e.shiftKey||e.button===2)&&h>=0){selected=h;charges.splice(h,1);pointer.target="none";mark();return;}if(pointer.target==="charge")selected=h;if(pointer.target==="path"){path=[world(p)];}mark();};
+      canvas.onpointermove=e=>{const p=pos(e);if(!pointer){hover=hitSample(p);updateReadout();return;}if(Math.hypot(p.x-pointer.start.x,p.y-pointer.start.y)>4)pointer.moved=true;if(pointer.target==="charge"&&charges[pointer.index]){charges[pointer.index]= {...charges[pointer.index],...world(p)};}else if(pointer.target==="path"){const w=world(p),last=path[path.length-1];if(!last||Math.hypot(w.x-last.x,w.y-last.y)>.035)path.push(w);}mark();};
+      canvas.onpointerup=e=>{const p=pos(e);if(pointer&&pointer.target==="none"&&!pointer.moved&&e.button===0&&hitCharge(p)<0&&!drawMode){charges.push({x:world(p).x,y:world(p).y,q:Number(controls.newCharge.value)});selected=charges.length-1;}if(pointer&&pointer.target==="path"&&path.length<3)path=[];pointer=null;hover=hitSample(p);mark();}; canvas.onpointercancel=()=>pointer=null; canvas.oncontextmenu=e=>e.preventDefault(); canvas.addEventListener("wheel",e=>{if(drawMode)return;e.preventDefault();const i=hitCharge(pos(e));if(i>=0){selected=i;charges[i].q=Math.max(-8,Math.min(8,charges[i].q+(e.deltaY<0?.25:-.25)));mark();}},{passive:false});
+      addEventListener("resize",resize); resize();
+    })();
+  </script>
+</body>
+</html>

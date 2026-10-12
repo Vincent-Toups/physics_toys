@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conservative Field Paths</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05070b;
+      color: #edf2ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #141b2a 0%, #06080d 58%, #020306 100%);
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2;
+      width: min(390px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(7, 10, 18, 0.74);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      user-select: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 112px 1fr 54px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 12px;
+    }
+
+    .row + .row {
+      margin-top: 8px;
+    }
+
+    label {
+      color: #b9c5db;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #69e2ff;
+    }
+
+    output {
+      color: #edf2ff;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2ff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    button.active {
+      background: rgba(105, 226, 255, 0.18);
+      border-color: rgba(105, 226, 255, 0.34);
+    }
+
+    button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    .readout {
+      flex: 1 1 100%;
+      color: #90a0bb;
+      font-size: 12px;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
+      min-height: 52px;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: #90a0bb;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 520px) {
+      .panel {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+      }
+
+      .row {
+        grid-template-columns: 94px 1fr 46px;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Random paths in a conservative electric field with equal work for equal endpoints"></canvas>
+
+  <div class="panel">
+    <div class="row">
+      <label for="charge">New charge</label>
+      <input id="charge" type="range" min="-3" max="3" step="0.1" value="1">
+      <output id="chargeOut">+1.0</output>
+    </div>
+    <div class="row">
+      <label for="fieldScale">Field scale</label>
+      <input id="fieldScale" type="range" min="12" max="180" step="1" value="70">
+      <output id="fieldScaleOut">70</output>
+    </div>
+    <div class="row">
+      <label for="fieldSpacing">Arrows</label>
+      <input id="fieldSpacing" type="range" min="22" max="72" step="2" value="36">
+      <output id="fieldSpacingOut">36</output>
+    </div>
+    <div class="row">
+      <label for="pathCount">Paths</label>
+      <input id="pathCount" type="range" min="2" max="12" step="1" value="7">
+      <output id="pathCountOut">7</output>
+    </div>
+    <div class="row">
+      <label for="pathSamples">Samples</label>
+      <input id="pathSamples" type="range" min="400" max="8000" step="100" value="2000">
+      <output id="pathSamplesOut">2000</output>
+    </div>
+    <div class="row">
+      <label for="wiggle">Path spread</label>
+      <input id="wiggle" type="range" min="0" max="1.6" step="0.05" value="0.75">
+      <output id="wiggleOut">0.75</output>
+    </div>
+    <div class="buttons">
+      <button id="toggleView" class="active" type="button">Field</button>
+      <button id="toggleMode" type="button">Between points</button>
+      <button id="endpointA" class="active" type="button">Move A</button>
+      <button id="endpointB" type="button">Move B</button>
+      <button id="regenerate" type="button">Randomize</button>
+      <button id="nextPath" type="button">Next path</button>
+      <button id="deleteCharge" type="button">Delete charge</button>
+      <div class="readout" id="readout"></div>
+    </div>
+    <div class="hint">Drag A or B to set endpoints. Click a path to select its sum graph. In infinity mode, starts are placed very far off-screen and each random path converges to B. Alt-click empty space to add a charge.</div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const potentialCanvas = document.createElement("canvas");
+      const potentialCtx = potentialCanvas.getContext("2d", { alpha: false });
+
+      const controls = {
+        charge: document.getElementById("charge"),
+        fieldScale: document.getElementById("fieldScale"),
+        fieldSpacing: document.getElementById("fieldSpacing"),
+        pathCount: document.getElementById("pathCount"),
+        pathSamples: document.getElementById("pathSamples"),
+        wiggle: document.getElementById("wiggle"),
+      };
+
+      const outputs = {
+        charge: document.getElementById("chargeOut"),
+        fieldScale: document.getElementById("fieldScaleOut"),
+        fieldSpacing: document.getElementById("fieldSpacingOut"),
+        pathCount: document.getElementById("pathCountOut"),
+        pathSamples: document.getElementById("pathSamplesOut"),
+        wiggle: document.getElementById("wiggleOut"),
+      };
+
+      const toggleViewButton = document.getElementById("toggleView");
+      const toggleModeButton = document.getElementById("toggleMode");
+      const endpointAButton = document.getElementById("endpointA");
+      const endpointBButton = document.getElementById("endpointB");
+      const regenerateButton = document.getElementById("regenerate");
+      const nextPathButton = document.getElementById("nextPath");
+      const deleteChargeButton = document.getElementById("deleteCharge");
+      const readout = document.getElementById("readout");
+
+      let width = 0;
+      let height = 0;
+      let pixelScale = 1;
+      let unitScale = 1;
+      let originX = 0;
+      let originY = 0;
+      let viewMode = "field";
+      let pathMode = "points";
+      let activeEndpoint = "a";
+      let potentialDirty = true;
+      let pathsDirty = true;
+      let seed = 72091;
+      let charges = [{ x: -0.85, y: 0.16, q: 1 }, { x: 0.9, y: -0.22, q: -1 }];
+      let selectedCharge = 0;
+      let endpointA = { x: -1.75, y: -0.85 };
+      let endpointB = { x: 1.45, y: 0.82 };
+      let generatedPaths = [];
+      let pathResults = [];
+      let selectedPath = 0;
+      let pointer = { active: false, moved: false, target: "none", chargeIndex: -1, downX: 0, downY: 0 };
+
+      const config = {
+        softening: 0.0025,
+        potentialCellSize: 2,
+        maxCharges: 64,
+        colors: ["#fff4b4", "#69c6ff", "#ff5f6d", "#63e6be", "#d6a4ff", "#ffd166", "#a7f070", "#ff9f68", "#7dd3fc", "#f0abfc", "#fca5a5", "#c4f1be"],
+      };
+
+      function formatSigned(value, digits = 1) {
+        if (Math.abs(value) < 0.0005) return Number(0).toFixed(digits);
+        return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+      }
+
+      function mulberry32(value) {
+        return function random() {
+          value |= 0;
+          value = value + 0x6D2B79F5 | 0;
+          let t = Math.imul(value ^ value >>> 15, 1 | value);
+          t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+          return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        };
+      }
+
+      function resize() {
+        pixelScale = Math.max(1, window.devicePixelRatio || 1);
+        width = Math.floor(window.innerWidth);
+        height = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(width * pixelScale);
+        canvas.height = Math.floor(height * pixelScale);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+        unitScale = Math.min(width, height) * 0.18;
+        originX = width * 0.52;
+        originY = height * 0.53;
+        potentialCanvas.width = Math.max(1, Math.ceil(width / config.potentialCellSize));
+        potentialCanvas.height = Math.max(1, Math.ceil(height / config.potentialCellSize));
+        potentialDirty = true;
+        pathsDirty = true;
+        draw();
+      }
+
+      function toScreen(point) {
+        return {
+          x: originX + point.x * unitScale,
+          y: originY - point.y * unitScale,
+        };
+      }
+
+      function toWorld(point) {
+        return {
+          x: (point.x - originX) / unitScale,
+          y: (originY - point.y) / unitScale,
+        };
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function fieldAt(x, y) {
+        let ex = 0;
+        let ey = 0;
+
+        for (const charge of charges) {
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r2 = Math.max(dx * dx + dy * dy, config.softening);
+          ex += charge.q * dx / r2;
+          ey += charge.q * dy / r2;
+        }
+
+        return { x: ex, y: ey };
+      }
+
+      function potentialAt(x, y) {
+        let potential = 0;
+
+        for (const charge of charges) {
+          const dx = x - charge.x;
+          const dy = y - charge.y;
+          const r = Math.sqrt(Math.max(dx * dx + dy * dy, config.softening));
+          potential += -charge.q * Math.log(r);
+        }
+
+        return potential;
+      }
+
+      function chargeAt(screenX, screenY) {
+        for (let i = charges.length - 1; i >= 0; i -= 1) {
+          const screen = toScreen(charges[i]);
+          if (Math.hypot(screenX - screen.x, screenY - screen.y) <= 22) return i;
+        }
+
+        return -1;
+      }
+
+      function endpointAt(screenX, screenY) {
+        if (pathMode === "infinity") {
+          const b = toScreen(endpointB);
+          return Math.hypot(screenX - b.x, screenY - b.y) <= 20 ? "b" : "none";
+        }
+
+        const a = toScreen(endpointA);
+        const b = toScreen(endpointB);
+        if (Math.hypot(screenX - b.x, screenY - b.y) <= 20) return "b";
+        if (Math.hypot(screenX - a.x, screenY - a.y) <= 20) return "a";
+        return "none";
+      }
+
+      function drawArrow(x, y, vx, vy, length, color, lineWidth = 1) {
+        const magnitude = Math.hypot(vx, vy);
+        if (magnitude < 0.000001) return;
+
+        const ux = vx / magnitude;
+        const uy = vy / magnitude;
+        const endX = x + ux * length;
+        const endY = y - uy * length;
+        const startX = x - ux * length * 0.25;
+        const startY = y + uy * length * 0.25;
+        const sideX = -uy;
+        const sideY = -ux;
+        const head = Math.max(5, Math.min(12, length * 0.32));
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - ux * head + sideX * head * 0.55, endY + uy * head + sideY * head * 0.55);
+        ctx.lineTo(endX - ux * head - sideX * head * 0.55, endY + uy * head - sideY * head * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = "#05070b";
+        ctx.fillRect(0, 0, width, height);
+
+        const gradient = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.75);
+        gradient.addColorStop(0, "#141b2a");
+        gradient.addColorStop(0.58, "#06080d");
+        gradient.addColorStop(1, "#020306");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      function drawGrid() {
+        ctx.save();
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.08)";
+        ctx.lineWidth = 1;
+
+        for (let x = originX % unitScale; x < width; x += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+
+        for (let y = originY % unitScale; y < height; y += unitScale) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.26)";
+        ctx.beginPath();
+        ctx.moveTo(0, originY);
+        ctx.lineTo(width, originY);
+        ctx.moveTo(originX, 0);
+        ctx.lineTo(originX, height);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function renderPotentialMap() {
+        const mapWidth = potentialCanvas.width;
+        const mapHeight = potentialCanvas.height;
+        const image = potentialCtx.createImageData(mapWidth, mapHeight);
+        const data = image.data;
+        const values = new Float32Array(mapWidth * mapHeight);
+        let minValue = Infinity;
+        let maxValue = -Infinity;
+
+        for (let py = 0; py < mapHeight; py += 1) {
+          for (let px = 0; px < mapWidth; px += 1) {
+            const screenX = (px + 0.5) * config.potentialCellSize;
+            const screenY = (py + 0.5) * config.potentialCellSize;
+            const world = toWorld({ x: screenX, y: screenY });
+            const potential = potentialAt(world.x, world.y);
+            const compressed = Math.sign(potential) * Math.log1p(Math.abs(potential));
+            const index = py * mapWidth + px;
+            values[index] = compressed;
+            minValue = Math.min(minValue, compressed);
+            maxValue = Math.max(maxValue, compressed);
+          }
+        }
+
+        const range = Math.max(0.0001, maxValue - minValue);
+
+        for (let i = 0; i < values.length; i += 1) {
+          const normalized = (values[i] - minValue) / range;
+          const gray = Math.round(18 + normalized * 226);
+          const offset = i * 4;
+          data[offset] = gray;
+          data[offset + 1] = gray;
+          data[offset + 2] = gray;
+          data[offset + 3] = 255;
+        }
+
+        potentialCtx.putImageData(image, 0, 0);
+        potentialDirty = false;
+      }
+
+      function drawPotential() {
+        if (potentialDirty) renderPotentialMap();
+
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(potentialCanvas, 0, 0, width, height);
+        ctx.restore();
+      }
+
+      function drawField() {
+        const spacing = Number(controls.fieldSpacing.value);
+        const fieldScale = Number(controls.fieldScale.value);
+
+        ctx.save();
+        for (let y = spacing * 0.55; y < height; y += spacing) {
+          for (let x = spacing * 0.55; x < width; x += spacing) {
+            const world = toWorld({ x, y });
+            const field = fieldAt(world.x, world.y);
+            const magnitude = Math.hypot(field.x, field.y);
+            if (magnitude < 0.000001) continue;
+
+            const strength = Math.min(1, Math.log(1 + magnitude * fieldScale * 0.32) / 4.2);
+            const length = 7 + strength * spacing * 0.44;
+            const alpha = 0.22 + strength * 0.62;
+            const red = Math.round(78 + strength * 184);
+            const green = Math.round(140 + strength * 98);
+            const blue = Math.round(255 - strength * 84);
+            drawArrow(x, y, field.x, field.y, length, `rgba(${red}, ${green}, ${blue}, ${alpha})`, 0.7 + strength * 0.9);
+          }
+        }
+        ctx.restore();
+      }
+
+      function drawCharges() {
+        ctx.save();
+        charges.forEach((charge, index) => {
+          const screen = toScreen(charge);
+          const positive = charge.q >= 0;
+          const radius = 13 + Math.min(10, Math.abs(charge.q) * 2.4);
+
+          ctx.shadowColor = positive ? "rgba(255, 92, 92, 0.45)" : "rgba(96, 177, 255, 0.45)";
+          ctx.shadowBlur = 18;
+          ctx.fillStyle = positive ? "#ff5f6d" : "#69c6ff";
+          ctx.beginPath();
+          ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = index === selectedCharge ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.52)";
+          ctx.lineWidth = index === selectedCharge ? 2.5 : 1.2;
+          ctx.stroke();
+
+          ctx.fillStyle = positive ? "#250608" : "#041423";
+          ctx.font = "700 18px Inter, ui-sans-serif, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(positive ? "+" : "-", screen.x, screen.y - 1);
+
+          ctx.fillStyle = "rgba(237, 242, 255, 0.92)";
+          ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+          ctx.fillText(formatSigned(charge.q, 1), screen.x, screen.y + radius + 15);
+        });
+        ctx.restore();
+      }
+
+      function visibleWorldRadius() {
+        const corners = [
+          toWorld({ x: 0, y: 0 }),
+          toWorld({ x: width, y: 0 }),
+          toWorld({ x: 0, y: height }),
+          toWorld({ x: width, y: height }),
+        ];
+        return Math.max(...corners.map((point) => Math.hypot(point.x, point.y)));
+      }
+
+      function infinityStart(index, count) {
+        const radius = visibleWorldRadius() + 120;
+        const span = Math.PI * 1.28;
+        const center = Math.PI;
+        const t = count <= 1 ? 0.5 : index / (count - 1);
+        const angle = center - span * 0.5 + span * t;
+        return {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        };
+      }
+
+      function makeSplineControls(start, end, random, spread) {
+        const controls = [{ ...start }];
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const distance = Math.max(0.001, Math.hypot(dx, dy));
+        const nx = -dy / distance;
+        const ny = dx / distance;
+        const amplitude = Math.min(distance * 0.34, 3.8) * spread;
+        const controlCount = 7;
+        let previousOffset = (random() - 0.5) * amplitude;
+
+        for (let i = 1; i <= controlCount; i += 1) {
+          const t = i / (controlCount + 1);
+          const envelope = Math.sin(Math.PI * t);
+          const targetOffset = (random() - 0.5) * amplitude * 2;
+          previousOffset = previousOffset * 0.62 + targetOffset * 0.38;
+          const offset = previousOffset * envelope;
+          const along = (random() - 0.5) * 0.025 * distance * envelope;
+
+          controls.push({
+            x: start.x + dx * t + dx / distance * along + nx * offset,
+            y: start.y + dy * t + dy / distance * along + ny * offset,
+          });
+        }
+
+        controls.push({ ...end });
+        return controls;
+      }
+
+      function catmullRomPoint(p0, p1, p2, p3, t) {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        return {
+          x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+          y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+        };
+      }
+
+      function catmullRomDerivative(p0, p1, p2, p3, t) {
+        const t2 = t * t;
+        return {
+          x: 0.5 * ((-p0.x + p2.x) + 2 * (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t + 3 * (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t2),
+          y: 0.5 * ((-p0.y + p2.y) + 2 * (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t + 3 * (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t2),
+        };
+      }
+
+      function splineSpan(controls, segmentIndex) {
+        const last = controls.length - 1;
+        return {
+          p0: controls[Math.max(0, segmentIndex - 1)],
+          p1: controls[segmentIndex],
+          p2: controls[Math.min(last, segmentIndex + 1)],
+          p3: controls[Math.min(last, segmentIndex + 2)],
+        };
+      }
+
+      function splinePointAt(controls, u) {
+        const spanCount = controls.length - 1;
+        const scaled = Math.max(0, Math.min(spanCount - 0.0000001, u * spanCount));
+        const segmentIndex = Math.min(spanCount - 1, Math.floor(scaled));
+        const localT = scaled - segmentIndex;
+        const span = splineSpan(controls, segmentIndex);
+        return catmullRomPoint(span.p0, span.p1, span.p2, span.p3, localT);
+      }
+
+      function sampleSpline(controls, samples) {
+        const points = [];
+        for (let i = 0; i < samples; i += 1) {
+          const u = samples <= 1 ? 0 : i / (samples - 1);
+          points.push(splinePointAt(controls, u));
+        }
+        points[0] = { ...controls[0] };
+        points[points.length - 1] = { ...controls[controls.length - 1] };
+        return points;
+      }
+
+      function integrateSplineWork(controls, samples) {
+        let work = 0;
+        const terms = [{ distance: 0, work: 0, term: 0 }];
+        let distanceAlong = 0;
+        const spanCount = controls.length - 1;
+        const nodes = [
+          { x: -Math.sqrt(3 / 5), w: 5 / 9 },
+          { x: 0, w: 8 / 9 },
+          { x: Math.sqrt(3 / 5), w: 5 / 9 },
+        ];
+
+        for (let i = 0; i < samples - 1; i += 1) {
+          const u0 = i / (samples - 1);
+          const u1 = (i + 1) / (samples - 1);
+          const center = (u0 + u1) * 0.5;
+          const halfWidth = (u1 - u0) * 0.5;
+          const a = splinePointAt(controls, u0);
+          const b = splinePointAt(controls, u1);
+          const length = Math.hypot(b.x - a.x, b.y - a.y);
+          let term = 0;
+
+          for (const node of nodes) {
+            const u = center + halfWidth * node.x;
+            const scaled = Math.max(0, Math.min(spanCount - 0.0000001, u * spanCount));
+            const segmentIndex = Math.min(spanCount - 1, Math.floor(scaled));
+            const localT = scaled - segmentIndex;
+            const span = splineSpan(controls, segmentIndex);
+            const point = catmullRomPoint(span.p0, span.p1, span.p2, span.p3, localT);
+            const derivative = catmullRomDerivative(span.p0, span.p1, span.p2, span.p3, localT);
+            const field = fieldAt(point.x, point.y);
+            term += node.w * (field.x * derivative.x + field.y * derivative.y);
+          }
+
+          term *= halfWidth * spanCount;
+          distanceAlong += length;
+          work += term;
+          terms.push({ distance: distanceAlong, work, term });
+        }
+
+        return { work, terms, length: distanceAlong };
+      }
+
+      function updatePaths() {
+        if (!pathsDirty) return;
+
+        const random = mulberry32(seed);
+        const count = Number(controls.pathCount.value);
+        const samples = Number(controls.pathSamples.value);
+        const spread = Number(controls.wiggle.value);
+        generatedPaths = [];
+        pathResults = [];
+
+        for (let i = 0; i < count; i += 1) {
+          const start = pathMode === "infinity" ? infinityStart(i, count) : endpointA;
+          const end = endpointB;
+          const pathControls = makeSplineControls(start, end, random, spread);
+          const path = sampleSpline(pathControls, samples);
+          const workData = integrateSplineWork(pathControls, samples);
+          const expected = potentialAt(start.x, start.y) - potentialAt(end.x, end.y);
+          generatedPaths.push(path);
+          pathResults.push({ work: workData.work, expected, start, end, error: workData.work - expected, terms: workData.terms, length: workData.length });
+        }
+
+        selectedPath = Math.max(0, Math.min(selectedPath, generatedPaths.length - 1));
+        pathsDirty = false;
+        updateReadout();
+      }
+
+      function drawPaths() {
+        updatePaths();
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        generatedPaths.forEach((path, index) => {
+          if (path.length < 2) return;
+          const color = config.colors[index % config.colors.length];
+          const selected = index === selectedPath;
+          ctx.strokeStyle = color + "cc";
+          ctx.lineWidth = selected ? 4.2 : 1.9;
+          ctx.globalAlpha = selected ? 1 : 0.68;
+          ctx.beginPath();
+          const first = toScreen(path[0]);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < path.length; i += 1) {
+            const current = toScreen(path[i]);
+            ctx.lineTo(current.x, current.y);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+
+          const arrowIndex = Math.floor(path.length * 0.58);
+          const a = path[arrowIndex];
+          const b = path[Math.min(path.length - 1, arrowIndex + 1)];
+          const screen = toScreen(a);
+          drawArrow(screen.x, screen.y, b.x - a.x, b.y - a.y, selected ? 22 : 16, color + "e6", selected ? 2.4 : 1.5);
+        });
+        ctx.restore();
+      }
+
+      function drawEndpoint(point, label, active) {
+        const screen = toScreen(point);
+        ctx.save();
+        ctx.shadowColor = active ? "rgba(255, 244, 180, 0.7)" : "rgba(105, 198, 255, 0.42)";
+        ctx.shadowBlur = active ? 18 : 12;
+        ctx.fillStyle = active ? "#fff4b4" : "#69c6ff";
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(5, 7, 11, 0.86)";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = active ? "#271d02" : "#041423";
+        ctx.font = "700 12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, screen.x, screen.y + 0.5);
+        ctx.restore();
+      }
+
+      function drawInfinityStarts() {
+        if (pathMode !== "infinity") return;
+
+        ctx.save();
+        ctx.fillStyle = "rgba(255, 244, 180, 0.9)";
+        ctx.strokeStyle = "rgba(255, 244, 180, 0.35)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        pathResults.forEach((result) => {
+          const screen = toScreen(result.start);
+          const clampedX = Math.max(22, Math.min(width - 22, screen.x));
+          const clampedY = Math.max(22, Math.min(height - 22, screen.y));
+          ctx.beginPath();
+          ctx.arc(clampedX, clampedY, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(clampedX, clampedY);
+          ctx.lineTo(clampedX + Math.sign(screen.x - clampedX || -1) * 22, clampedY + Math.sign(screen.y - clampedY || 1) * 14);
+          ctx.stroke();
+        });
+
+        ctx.fillText("far starts", Math.max(60, width * 0.08), height - 28);
+        ctx.restore();
+      }
+
+      function drawEndpoints() {
+        if (pathMode === "points") {
+          drawEndpoint(endpointA, "A", activeEndpoint === "a");
+        }
+        drawEndpoint(endpointB, "B", activeEndpoint === "b" || pathMode === "infinity");
+        drawInfinityStarts();
+      }
+
+      function drawResultsPanel() {
+        updatePaths();
+        if (pathResults.length === 0) return;
+
+        const panelWidth = Math.min(430, Math.max(300, width * 0.36));
+        const rowHeight = 18;
+        const panelHeight = 72 + rowHeight * pathResults.length;
+        const x = Math.max(16, width - panelWidth - 18);
+        const y = Math.max(16, height - panelHeight - 18);
+        const works = pathResults.map((result) => result.work);
+        const expected = pathResults.reduce((sum, result) => sum + result.expected, 0) / pathResults.length;
+        const minWork = Math.min(...works);
+        const maxWork = Math.max(...works);
+        const spread = maxWork - minWork;
+
+        ctx.save();
+        ctx.fillStyle = "rgba(7, 10, 18, 0.76)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x, y, panelWidth, panelHeight, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.9)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(pathMode === "infinity" ? "work from far starts to B" : "work from A to B", x + 12, y + 10);
+        ctx.fillStyle = "rgba(144, 160, 187, 0.96)";
+        ctx.textAlign = "right";
+        ctx.fillText(`target ${expected.toFixed(2)}`, x + panelWidth - 12, y + 10);
+        ctx.fillText(`spread ${spread.toExponential(2)}`, x + panelWidth - 12, y + 28);
+
+        pathResults.forEach((result, index) => {
+          const rowY = y + 54 + index * rowHeight;
+          ctx.fillStyle = config.colors[index % config.colors.length];
+          ctx.fillRect(x + 12, rowY + 3, 10, 10);
+          if (index === selectedPath) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x + 10, rowY + 1, panelWidth - 20, rowHeight - 1);
+          }
+          ctx.fillStyle = "rgba(237, 242, 255, 0.86)";
+          ctx.textAlign = "left";
+          ctx.fillText(`path ${index + 1}`, x + 30, rowY);
+          ctx.textAlign = "right";
+          ctx.fillText(`${result.work.toFixed(2)}  err ${result.error.toExponential(1)}`, x + panelWidth - 12, rowY);
+        });
+        ctx.restore();
+      }
+
+      function drawSelectedWorkGraph() {
+        updatePaths();
+        const result = pathResults[selectedPath];
+        if (!result || result.terms.length < 2) return;
+
+        const graphWidth = Math.min(500, Math.max(320, width * 0.42));
+        const graphHeight = 190;
+        const marginX = 34;
+        const marginY = 26;
+        const x = Math.max(16, width - graphWidth - 18);
+        const y = Math.max(190, height - graphHeight - 24 - (72 + Number(controls.pathCount.value) * 18));
+        const rawValues = result.terms.slice(1).map((term) => term.term);
+        const binCount = Math.min(320, rawValues.length);
+        const values = [];
+        for (let bin = 0; bin < binCount; bin += 1) {
+          const startIndex = Math.floor(bin / binCount * rawValues.length);
+          const endIndex = Math.floor((bin + 1) / binCount * rawValues.length);
+          let sum = 0;
+          for (let i = startIndex; i < endIndex; i += 1) {
+            sum += rawValues[i];
+          }
+          values.push(sum);
+        }
+        const maxAbs = Math.max(0.0001, ...values.map((value) => Math.abs(value)));
+        const innerWidth = graphWidth - marginX * 2;
+        const innerHeight = graphHeight - marginY * 2;
+        const color = config.colors[selectedPath % config.colors.length];
+
+        function barX(index) {
+          const progress = values.length <= 1 ? 0 : index / (values.length - 1);
+          return x + marginX + progress * innerWidth;
+        }
+
+        ctx.save();
+        ctx.fillStyle = "rgba(7, 10, 18, 0.78)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x, y, graphWidth, graphHeight, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        const zeroY = y + marginY + innerHeight * 0.5;
+        ctx.strokeStyle = "rgba(237, 242, 255, 0.2)";
+        ctx.beginPath();
+        ctx.moveTo(x + marginX, zeroY);
+        ctx.lineTo(x + graphWidth - marginX, zeroY);
+        ctx.stroke();
+
+        const barWidth = Math.max(1, innerWidth / values.length * 0.82);
+        for (let i = 0; i < values.length; i += 1) {
+          const value = values[i];
+          const sx = barX(i);
+          const barHeight = Math.abs(value) / maxAbs * innerHeight * 0.44;
+          const top = value >= 0 ? zeroY - barHeight : zeroY;
+          ctx.fillStyle = value >= 0 ? color : "rgba(105, 198, 255, 0.9)";
+          ctx.fillRect(sx - barWidth * 0.5, top, Math.max(1, barWidth), Math.max(1, barHeight));
+        }
+
+        const positiveSum = values.reduce((sum, value) => sum + Math.max(0, value), 0);
+        const negativeSum = values.reduce((sum, value) => sum + Math.min(0, value), 0);
+
+        ctx.fillStyle = "rgba(237, 242, 255, 0.9)";
+        ctx.font = "12px Inter, ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(`selected path ${selectedPath + 1}: signed terms E · Δr`, x + 12, y + 10);
+        ctx.fillStyle = "rgba(144, 160, 187, 0.96)";
+        ctx.textAlign = "right";
+        ctx.fillText(`+${positiveSum.toFixed(4)} ${negativeSum.toFixed(4)}`, x + graphWidth - 12, y + 10);
+        ctx.fillText(`Σ ${result.work.toFixed(4)}`, x + graphWidth - 12, y + 28);
+        ctx.textAlign = "left";
+        ctx.fillText("segments along selected path", x + marginX, y + graphHeight - 18);
+        ctx.restore();
+      }
+
+      function updateReadout() {
+        if (pathResults.length === 0) return;
+
+        const works = pathResults.map((result) => result.work);
+        const minWork = Math.min(...works);
+        const maxWork = Math.max(...works);
+        const averageWork = works.reduce((sum, value) => sum + value, 0) / works.length;
+        const averageExpected = pathResults.reduce((sum, result) => sum + result.expected, 0) / pathResults.length;
+        const label = pathMode === "infinity" ? "far starts -> B" : "A -> B";
+        readout.textContent = `${label}: mean Σ E · Δr = ${averageWork.toFixed(4)}, potential difference = ${averageExpected.toFixed(4)}, path spread = ${(maxWork - minWork).toExponential(2)}`;
+      }
+
+      function distanceToSegment(point, a, b) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const lengthSquared = dx * dx + dy * dy;
+        if (lengthSquared < 0.000001) return Math.hypot(point.x - a.x, point.y - a.y);
+
+        const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared));
+        return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+      }
+
+      function pathIndexAt(screenX, screenY) {
+        updatePaths();
+        const point = { x: screenX, y: screenY };
+        const threshold = 9;
+        let bestIndex = -1;
+        let bestDistance = Infinity;
+
+        generatedPaths.forEach((path, index) => {
+          const stride = Math.max(1, Math.floor(path.length / 900));
+          for (let i = 0; i < path.length - 1; i += stride) {
+            const a = toScreen(path[i]);
+            const b = toScreen(path[Math.min(path.length - 1, i + stride)]);
+            const distance = distanceToSegment(point, a, b);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestIndex = index;
+            }
+          }
+        });
+
+        return bestDistance <= threshold ? bestIndex : -1;
+      }
+
+      function selectNextPath(delta = 1) {
+        updatePaths();
+        if (generatedPaths.length === 0) return;
+        selectedPath = (selectedPath + delta + generatedPaths.length) % generatedPaths.length;
+        updateReadout();
+        draw();
+      }
+
+      function draw() {
+        drawBackground();
+        if (viewMode === "potential") drawPotential();
+        drawGrid();
+        if (viewMode === "field") drawField();
+        drawPaths();
+        drawCharges();
+        drawEndpoints();
+        drawSelectedWorkGraph();
+        drawResultsPanel();
+      }
+
+      function updateLabels() {
+        outputs.charge.textContent = formatSigned(Number(controls.charge.value), 1);
+        outputs.fieldScale.textContent = controls.fieldScale.value;
+        outputs.fieldSpacing.textContent = controls.fieldSpacing.value;
+        outputs.pathCount.textContent = controls.pathCount.value;
+        outputs.pathSamples.textContent = controls.pathSamples.value;
+        outputs.wiggle.textContent = Number(controls.wiggle.value).toFixed(2);
+        toggleViewButton.textContent = viewMode === "field" ? "Field" : "Potential";
+        toggleViewButton.classList.toggle("active", viewMode === "field");
+        toggleModeButton.textContent = pathMode === "points" ? "Between points" : "From infinity";
+        toggleModeButton.classList.toggle("active", pathMode === "infinity");
+        endpointAButton.disabled = pathMode === "infinity";
+        endpointAButton.classList.toggle("active", pathMode === "points" && activeEndpoint === "a");
+        endpointBButton.classList.toggle("active", activeEndpoint === "b" || pathMode === "infinity");
+        deleteChargeButton.disabled = selectedCharge < 0;
+        potentialDirty = true;
+        pathsDirty = true;
+        draw();
+      }
+
+      function addCharge(point) {
+        if (charges.length >= config.maxCharges) return;
+        charges.push({ x: point.x, y: point.y, q: Number(controls.charge.value) });
+        selectedCharge = charges.length - 1;
+        potentialDirty = true;
+        pathsDirty = true;
+        updateLabels();
+      }
+
+      function deleteSelectedCharge() {
+        if (selectedCharge < 0) return;
+        charges.splice(selectedCharge, 1);
+        selectedCharge = Math.min(selectedCharge, charges.length - 1);
+        potentialDirty = true;
+        pathsDirty = true;
+        updateLabels();
+      }
+
+      function adjustCharge(index, delta) {
+        if (index < 0 || !charges[index]) return;
+        charges[index].q = Math.max(-8, Math.min(8, charges[index].q + delta * 0.25));
+        if (Math.abs(charges[index].q) < 0.001) charges[index].q = 0;
+        selectedCharge = index;
+        potentialDirty = true;
+        pathsDirty = true;
+        updateLabels();
+      }
+
+      for (const control of Object.values(controls)) {
+        control.addEventListener("input", updateLabels);
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const pos = pointerPosition(event);
+        const world = toWorld(pos);
+        const hitEndpoint = endpointAt(pos.x, pos.y);
+        const hitCharge = chargeAt(pos.x, pos.y);
+        const hitPath = pathIndexAt(pos.x, pos.y);
+        pointer = { active: true, moved: false, target: "none", chargeIndex: hitCharge, downX: pos.x, downY: pos.y };
+        canvas.setPointerCapture(event.pointerId);
+
+        if (hitEndpoint !== "none") {
+          activeEndpoint = hitEndpoint;
+          pointer.target = "endpoint";
+          canvas.style.cursor = "grabbing";
+          updateLabels();
+          return;
+        }
+
+        if ((event.shiftKey || event.button === 2) && hitCharge >= 0) {
+          selectedCharge = hitCharge;
+          deleteSelectedCharge();
+          pointer.target = "deleted";
+          return;
+        }
+
+        if (hitCharge >= 0) {
+          selectedCharge = hitCharge;
+          pointer.target = "charge";
+          canvas.style.cursor = "grabbing";
+          updateLabels();
+          return;
+        }
+
+        if (hitPath >= 0) {
+          selectedPath = hitPath;
+          pointer.target = "path";
+          updateReadout();
+          draw();
+          return;
+        }
+
+        if (event.altKey) {
+          addCharge(world);
+          pointer.target = "added";
+          return;
+        }
+
+        pointer.target = "endpoint";
+        if (pathMode === "infinity") {
+          endpointB = world;
+          activeEndpoint = "b";
+        } else if (activeEndpoint === "a") {
+          endpointA = world;
+        } else {
+          endpointB = world;
+        }
+        pathsDirty = true;
+        draw();
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        const pos = pointerPosition(event);
+
+        if (!pointer.active) {
+          const hitEndpoint = endpointAt(pos.x, pos.y);
+          const hitCharge = chargeAt(pos.x, pos.y);
+          canvas.style.cursor = hitEndpoint !== "none" || hitCharge >= 0 ? "grab" : "crosshair";
+          return;
+        }
+
+        if (Math.hypot(pos.x - pointer.downX, pos.y - pointer.downY) > 4) pointer.moved = true;
+        const world = toWorld(pos);
+
+        if (pointer.target === "endpoint") {
+          if (pathMode === "infinity" || activeEndpoint === "b") {
+            endpointB = world;
+          } else {
+            endpointA = world;
+          }
+          pathsDirty = true;
+          draw();
+        } else if (pointer.target === "charge" && charges[pointer.chargeIndex]) {
+          charges[pointer.chargeIndex].x = world.x;
+          charges[pointer.chargeIndex].y = world.y;
+          potentialDirty = true;
+          pathsDirty = true;
+          draw();
+        }
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        if (pointer.active) canvas.releasePointerCapture(event.pointerId);
+        pointer.active = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        pointer.active = false;
+        canvas.style.cursor = "crosshair";
+      });
+
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const pos = pointerPosition(event);
+        const hitCharge = chargeAt(pos.x, pos.y);
+        const target = hitCharge >= 0 ? hitCharge : selectedCharge;
+        adjustCharge(target, event.deltaY < 0 ? 1 : -1);
+      }, { passive: false });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Delete" || event.key === "Backspace") {
+          deleteSelectedCharge();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          adjustCharge(selectedCharge, 1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          adjustCharge(selectedCharge, -1);
+        } else if (event.key.toLowerCase() === "a" && pathMode === "points") {
+          activeEndpoint = "a";
+          updateLabels();
+        } else if (event.key.toLowerCase() === "b") {
+          activeEndpoint = "b";
+          updateLabels();
+        } else if (event.key === "]") {
+          selectNextPath(1);
+        } else if (event.key === "[") {
+          selectNextPath(-1);
+        }
+      });
+
+      toggleViewButton.addEventListener("click", () => {
+        viewMode = viewMode === "field" ? "potential" : "field";
+        updateLabels();
+      });
+
+      toggleModeButton.addEventListener("click", () => {
+        pathMode = pathMode === "points" ? "infinity" : "points";
+        activeEndpoint = pathMode === "points" ? "a" : "b";
+        seed += 137;
+        pathsDirty = true;
+        updateLabels();
+      });
+
+      endpointAButton.addEventListener("click", () => {
+        if (pathMode === "infinity") return;
+        activeEndpoint = "a";
+        updateLabels();
+      });
+
+      endpointBButton.addEventListener("click", () => {
+        activeEndpoint = "b";
+        updateLabels();
+      });
+
+      regenerateButton.addEventListener("click", () => {
+        seed = (seed + 1009 + Math.floor(Math.random() * 100000)) >>> 0;
+        pathsDirty = true;
+        draw();
+      });
+
+      nextPathButton.addEventListener("click", () => {
+        selectNextPath(1);
+      });
+
+      deleteChargeButton.addEventListener("click", deleteSelectedCharge);
+      window.addEventListener("resize", resize);
+
+      resize();
+      updateLabels();
+    })();
+  </script>
+</body>
+</html>
